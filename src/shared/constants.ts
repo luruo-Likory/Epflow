@@ -4,7 +4,7 @@ export const APP_NAME = 'EpFlow'
 export const SETTINGS_SCHEMA_VERSION = 1
 export const STATE_SCHEMA_VERSION = 1
 
-export const DEFAULT_MATERIAL_ROOT = 'D:\\media\\origin material'
+export const DEFAULT_MATERIAL_ROOT = 'C:\\EpFlow\\materials'
 export const DEFAULT_SUB_DIR = '[翻译用]'
 export const DEFAULT_WORK_NAME_TEMPLATE = '{anime} - {ep}'
 export const DEFAULT_PROMPT_VERSION = 'review-v1'

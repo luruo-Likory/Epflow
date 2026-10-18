@@ -22,13 +22,9 @@
 
 ## 二、界面预览
 
-| 项目列表 | 设置 |
+| 项目列表 | 发布（v2 占位） |
 |---|---|
-| ![项目列表](docs/screenshots/01-projects.png) | ![设置](docs/screenshots/02-settings.png) |
-
-| 新建向导 | 发布（v2 占位） |
-|---|---|
-| ![新建向导](docs/screenshots/04-wizard.png) | ![发布](docs/screenshots/05-publish.png) |
+| ![项目列表](docs/screenshots/01-projects.png) | ![发布](docs/screenshots/05-publish.png) |
 
 > 截图由打包后的 exe 以 `--smoke --shots=<dir>` 自动捕获（无人工介入），见 §九。
 
@@ -62,7 +58,7 @@ npm run dist:portable
 
 ## 四、首次使用
 
-1. 启动 EpFlow → 在「设置」里确认**素材根目录**（默认 `D:\media\origin material`）与外部工具路径。
+1. 启动 EpFlow → 在「设置」里确认**素材根目录**（默认 `C:\EpFlow\materials`）与外部工具路径。
 2. 「项目 → 新建项目」：填番名、发布名（软件会自动识别并高亮集数位，点选确认）、总集数、基准发布集数。
 3. 目录预览确认后创建；进入项目页 →「模板与实例化」上传该番的 `json` / `vpy` 模板，预览差异后一键实例化到全部集。
 4. 每集：导入字幕 → AI 审阅 → 处理问题 → 人工审阅通过 → 生成章节 → 章节锁定 → 压制 → 合并 → 转码选择 → 命名 → 完成。
@@ -117,7 +113,7 @@ npm run dist:portable
 |---|---|---|
 | OKEGui | 压制（只启动 GUI，不自动化界面） | 阻断压制，引导设置路径 |
 | ffmpeg / ffprobe | 转 MP4、媒体信息与章节校验 | 阻断转码/校验，其余可用 |
-| MKVToolNix（mkvpropedit / mkvmerge） | 写章节 / 回退合并 | 阻断合并（本机已装 v97：`D:\Program Files\MKVToolNix`，软件自动探测） |
+| MKVToolNix（mkvpropedit / mkvmerge） | 写章节 / 回退合并 | 阻断合并（需安装 MKVToolNix v97+，软件自动探测） |
 | Aegisub | 人工审阅打开字幕 | 回退系统默认程序 |
 | mpv | 可选预览 | 使用内置播放器 |
 | Python | vpy 语法校验（可选） | 跳过校验并提示 |
@@ -210,7 +206,7 @@ $env:ELECTRON_RUN_AS_NODE=$null
 | 安装时报 NSIS Error: Error writing temporary file | 这是 NSIS 安装器写 `%TEMP%` 失败（临时目录不可写/被清理/杀软拦截/磁盘满），**不是安装包损坏**。优先改用 `EpFlow-1.0.0-x64.zip`（解压即用）；仍想安装时：① echo %TEMP% 确认目录存在且可写，必要时 `set TEMP=%LOCALAPPDATA%\Temp` 后重新运行；② 把安装包放到本地磁盘（不要在网络盘/压缩包内直接运行）；③ 暂时关闭杀软实时防护或以普通用户运行 |
 | 压制按钮一直灰 | 看「压制」页的门禁清单，逐项处理（模板/AI/人工/章节/哈希/源视频） |
 | 找不到成品 | 用「重新扫描成品」或「手动指定」；OKEGui 输出目录必须在集目录的 `output\` 下 |
-| 合并失败 | 检查 MKVToolNix 路径（本机 `D:\Program Files\MKVToolNix`）、文件是否被播放器占用；失败会自动回滚备份 |
+| 合并失败 | 检查 MKVToolNix 路径、文件是否被播放器占用；失败会自动回滚备份 |
 | 字幕改了但状态没变 | 软件在运行时会监视 `[翻译用]` 与集目录；也可重新导入会强制失效 |
 | AI 审阅报 DSH 不可用 | 切换到「粘贴 JSON」模式，或配置 HTTP 接口与环境变量 |
 
@@ -218,5 +214,5 @@ $env:ELECTRON_RUN_AS_NODE=$null
 
 ## 十三、文档
 
-- 需求与设计：`D:\Vibe coding\流程规范化软件-需求与设计文档.md`
+- 需求与设计：`需求与设计文档（项目外部）`
 - 开发任务拆解：`docs/01-开发任务拆解-v1.0.md`

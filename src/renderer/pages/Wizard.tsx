@@ -453,7 +453,7 @@ export default function Wizard(props: {
                 <div className="row">
                   <TextInput
                     value={form.materialRoot}
-                    placeholder="D:\media\origin material"
+                    placeholder="C:\EpFlow\materials"
                     onChange={(event) => update('materialRoot', event.target.value)}
                   />
                   <Button onClick={() => void pickMaterialRoot()}>选择目录</Button>
@@ -496,7 +496,7 @@ export default function Wizard(props: {
               <TextArea
                 rows={3}
                 value={form.releaseName}
-                placeholder="[云光字幕组] 动物狂想曲 最终季 Part.2 BEASTARS Final Season [13][简体双语][1080p]招募翻译"
+                placeholder="[字幕组] 示例动画 [13][简体双语][1080p]招募翻译"
                 onChange={(event) => update('releaseName', event.target.value)}
                 onBlur={() => setTouched(true)}
               />

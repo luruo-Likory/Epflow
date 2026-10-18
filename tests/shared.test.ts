@@ -25,7 +25,7 @@ import { formatChapterTime, formatTimecode, parseAssTime } from '@shared/time'
 import { diffLines } from '@shared/diff'
 
 const RELEASE_SAMPLE =
-  '[云光字幕组] 动物狂想曲 最终季 Part.2 BEASTARS Final Season [13][简体双语][1080p]招募翻译'
+  '[字幕组] 示例动画 [13][简体双语][1080p]招募翻译'
 
 describe('release-name', () => {
   it('默认候选为方括号中的 13，并能生成发布名模板', () => {
@@ -35,7 +35,7 @@ describe('release-name', () => {
     expect(candidate!.value).toBe(13)
     expect(candidate!.pattern).toBe('bracket')
     expect(applyReleaseTemplate(RELEASE_SAMPLE, candidate!)).toBe(
-      '[云光字幕组] 动物狂想曲 最终季 Part.2 BEASTARS Final Season [{release}][简体双语][1080p]招募翻译'
+      '[字幕组] 示例动画 [{release}][简体双语][1080p]招募翻译'
     )
   })
 
@@ -93,11 +93,11 @@ const baseInput: TemplateInput = {
   releaseNo: '13',
   releaseInt: 13,
   releaseRaw: '13',
-  root: 'D:\\Anime',
-  project: 'D:\\Anime\\BEASTARS',
-  epDir: 'D:\\Anime\\BEASTARS\\01',
-  subDir: 'D:\\Anime\\BEASTARS\\01\\sub',
-  output: 'D:\\Anime\\BEASTARS\\13.mkv',
+  root: 'C:\\media\\Anime',
+  project: 'C:\\media\\Anime\\BEASTARS',
+  epDir: 'C:\\media\\Anime\\BEASTARS\\01',
+  subDir: 'C:\\media\\Anime\\BEASTARS\\01\\sub',
+  output: 'C:\\media\\Anime\\BEASTARS\\13.mkv',
   ext: 'mkv',
   workNameTemplate: '{anime} - {ep}'
 }
@@ -105,11 +105,11 @@ const baseInput: TemplateInput = {
 describe('template-vars', () => {
   it('createVariableMap 正确生成主机路径变量', () => {
     const vars = createVariableMap(baseInput)
-    expect(vars.ep_dir).toBe('D:\\Anime\\BEASTARS\\01')
-    expect(vars.sub_dir).toBe('D:\\Anime\\BEASTARS\\01\\sub')
-    expect(vars.output).toBe('D:\\Anime\\BEASTARS\\13.mkv')
-    expect(vars.root).toBe('D:\\Anime')
-    expect(vars.project).toBe('D:\\Anime\\BEASTARS')
+    expect(vars.ep_dir).toBe('C:\\media\\Anime\\BEASTARS\\01')
+    expect(vars.sub_dir).toBe('C:\\media\\Anime\\BEASTARS\\01\\sub')
+    expect(vars.output).toBe('C:\\media\\Anime\\BEASTARS\\13.mkv')
+    expect(vars.root).toBe('C:\\media\\Anime')
+    expect(vars.project).toBe('C:\\media\\Anime\\BEASTARS')
     expect(vars.ext).toBe('mkv')
   })
 

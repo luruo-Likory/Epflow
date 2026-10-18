@@ -731,7 +731,7 @@ export default function SettingsPage(props: { onBack: () => void }): React.React
                 <div className="row" style={{ gap: 6 }}>
                   <TextInput
                     value={draft.materialRoot}
-                    placeholder="D:\media\origin material"
+                    placeholder="C:\EpFlow\materials"
                     onChange={(event) =>
                       mutate((next) => {
                         next.materialRoot = event.target.value

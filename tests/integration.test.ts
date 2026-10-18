@@ -56,7 +56,7 @@ describe('端到端主流程（不依赖外部工具）', () => {
     const input = {
       animeName: 'BEASTARS S03',
       materialRoot: MATERIAL,
-      releaseNameTemplate: '[云光字幕组] 动物狂想曲 最终季 Part.2 BEASTARS Final Season [{release}][简体双语][1080p]招募翻译',
+      releaseNameTemplate: '[字幕组] 示例动画 [{release}][简体双语][1080p]招募翻译',
       releaseEpisodeBase: 13,
       releaseEpisodeWidth: 2,
       episodeCount: 3,
@@ -164,7 +164,7 @@ describe('端到端主流程（不依赖外部工具）', () => {
 
     // 命名预览
     const naming = previewFinalName(root, '01', settings)
-    expect(naming.name).toBe('[云光字幕组] 动物狂想曲 最终季 Part.2 BEASTARS Final Season [13][简体双语][1080p]招募翻译.mkv')
+    expect(naming.name).toBe('[字幕组] 示例动画 [13][简体双语][1080p]招募翻译.mkv')
 
     // 审计记录完整
     const audit = openStore(root).readAudit()
@@ -194,9 +194,11 @@ describe('端到端主流程（不依赖外部工具）', () => {
 })
 
 describe('模板替换（用真实 OKEGui 模板验证）', () => {
-  const REAL_JSON = 'D:\\media\\origin material\\BEASTARS S03\\01\\BEASTARS.S03E13.json'
-  const REAL_VPY = 'D:\\media\\origin material\\BEASTARS S03\\01\\BEASTARS.S03E13.vpy'
-  const available = fs.existsSync(REAL_JSON) && fs.existsSync(REAL_VPY)
+  // 用环境变量指向本机真实模板目录；未设置时整组测试自动跳过
+  const REAL_ROOT = process.env.EPFLOW_TEST_MATERIAL ?? ''
+  const REAL_JSON = REAL_ROOT ? path.join(REAL_ROOT, 'BEASTARS S03', '01', 'BEASTARS.S03E13.json') : ''
+  const REAL_VPY = REAL_ROOT ? path.join(REAL_ROOT, 'BEASTARS S03', '01', 'BEASTARS.S03E13.vpy') : ''
+  const available = Boolean(REAL_ROOT) && fs.existsSync(REAL_JSON) && fs.existsSync(REAL_VPY)
 
   it.skipIf(!available)('实例化后 JSON/VPY 全部指向新工作名与集目录', async () => {
     const { saveTemplateFiles, analyzeTemplate, previewTemplate, instantiateTemplates } = await import(
@@ -209,7 +211,7 @@ describe('模板替换（用真实 OKEGui 模板验证）', () => {
       {
         animeName: 'BEASTARS S03',
         materialRoot: material,
-        releaseNameTemplate: '[云光字幕组] 动物狂想曲 最终季 [{release}][简体双语][1080p]招募翻译',
+        releaseNameTemplate: '[字幕组] 示例动画 [{release}][简体双语][1080p]招募翻译',
         releaseEpisodeBase: 13,
         releaseEpisodeWidth: 2,
         episodeCount: 2,
