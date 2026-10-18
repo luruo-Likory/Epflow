@@ -1,0 +1,46 @@
+appId: com.epflow.app
+productName: EpFlow
+copyright: Copyright © 2026 EpFlow
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - package.json
+  - '!**/*.map'
+  - '!**/*.ts'
+asar: true
+asarUnpack: []
+compression: normal
+win:
+  icon: build/icon.ico
+  requestedExecutionLevel: asInvoker
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+    - target: zip
+      arch:
+        - x64
+  artifactName: ${productName}-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: EpFlow
+  deleteAppDataOnUninstall: false
+  artifactName: ${productName}-${version}-Setup.${ext}
+  uninstallDisplayName: EpFlow 番剧流程规范化
+  installerLanguages:
+    - zh_CN
+  language: '2052'
+  warningsAsErrors: false
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}
+  unpackDirName: EpFlow
