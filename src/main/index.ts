@@ -8,6 +8,10 @@ import { closeLog, log, scoped } from './util/logger'
 import { readJsonSafe, writeJsonAtomic } from './store/atomic'
 
 const logMain = scoped('main')
+
+// 管道断开时避免 EPIPE 把进程带崩
+process.stdout?.on?.('error', () => undefined)
+process.stderr?.on?.('error', () => undefined)
 const isDev = !app.isPackaged && process.env.NODE_ENV === 'development'
 const smokeArg = process.argv.find((a) => a.startsWith('--smoke'))
 
@@ -181,7 +185,11 @@ async function captureScreens(win: BrowserWindow, dir: string): Promise<string[]
       `(() => {
         const target = ${JSON.stringify(text)}.replace(/\\s/g, '')
         const nodes = Array.from(document.querySelectorAll('button, .nav-item, .tab'))
-        const el = nodes.find((n) => ((n.textContent || '').replace(/\\s/g, '')).includes(target))
+        const el = nodes.find(
+          (n) =>
+            ((n.textContent || '').replace(/\\s/g, '')).includes(target) ||
+            ((n.getAttribute('aria-label') || '').replace(/\\s/g, '')).includes(target)
+        )
         if (el) { el.click(); return true }
         return false
       })()`
@@ -189,7 +197,50 @@ async function captureScreens(win: BrowserWindow, dir: string): Promise<string[]
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
   await wait(600)
+  // 冒烟时强制使用 mpv 内嵌，避免历史 localStorage 把截图固定成内置播放器
+  await win.webContents
+    .executeJavaScript(`try { localStorage.setItem('epflow.player', 'builtin') } catch (e) {}`)
+    .catch(() => undefined)
   await shot('01-projects')
+  // 若已有项目，进入项目页与审阅工作台各截一张，便于验证新界面
+  const openedProject = (await win.webContents.executeJavaScript(
+    `(() => {
+      const cards = Array.from(document.querySelectorAll('.card'))
+      const card =
+        cards.find((c) => (c.textContent || '').includes('演示番')) ||
+        cards.find((c) => /共 \\d+ 集|已完成|状态库/.test(c.textContent || ''))
+      if (!card) return false
+      card.click()
+      return true
+    })()`
+  )) as boolean
+  if (openedProject) {
+    await wait(1400)
+    await shot('01b-project')
+    const openedEpisode = (await win.webContents.executeJavaScript(
+      `(() => {
+        const cards = Array.from(document.querySelectorAll('.card'))
+        const card = cards.find((c) => /第 \\d+ 集/.test(c.textContent || ''))
+        if (!card) return false
+        card.click()
+        return true
+      })()`
+    )) as boolean
+    if (openedEpisode) {
+      await wait(Number(process.env.EPFLOW_SMOKE_HOLD ?? 1600))
+      await shot('01c-workbench')
+      // 试着播放，验证 mpv 是否真的在推进（截图看不到子窗口内容，用状态判断）
+      await clickText('播放或暂停')
+      await wait(2000)
+      const status = (await win.webContents.executeJavaScript(
+        `window.epflow.invoke('player:status')`
+      )) as { data?: { running?: boolean; timePos?: number; paused?: boolean } }
+      trail.push(`player: ${JSON.stringify(status?.data ?? status)}`)
+      await shot('01d-workbench-playing')
+      await clickText('← 项目')
+      await wait(600)
+    }
+  }
   if (await clickText('设置')) {
     await wait(900)
     await shot('02-settings')

@@ -52,6 +52,21 @@ export function normalizeToUtf8(buf: Buffer): { text: string; encoding: DecodeRe
   return { text: decoded.text.replace(/^\uFEFF/, ''), encoding: decoded.encoding }
 }
 
+export const UTF8_BOM = '\uFEFF'
+
+/**
+ * 写出 ASS 时补 UTF-8 BOM。
+ * VSFilter / TextSubMod 在文件没有 BOM 时会按系统 ANSI 代码页（中文机器为 GBK）解码，
+ * 中文会整片变成乱码；libass 与 Aegisub 都接受带 BOM 的 UTF-8。
+ */
+export function withUtf8Bom(text: string): string {
+  return text.startsWith(UTF8_BOM) ? text : `${UTF8_BOM}${text}`
+}
+
+export function stripUtf8Bom(text: string): string {
+  return text.replace(/^\uFEFF/, '')
+}
+
 /** 粗略判断是否为 ASS/SSA 内容 */
 export function looksLikeAss(text: string): boolean {
   return /\[Script Info\]/i.test(text) && /\[Events\]/i.test(text)

@@ -5,6 +5,7 @@ import { registerSubtitleTopics } from './topics/subtitle'
 import { registerReviewTopics } from './topics/review'
 import { registerChapterTopics } from './topics/chapter'
 import { registerPipelineTopics } from './topics/pipeline'
+import { registerPlayerTopics } from './topics/player'
 
 /** 所有 IPC 主题的注册入口；新增模块时在这里挂载 */
 export function registerAllTopics(): void {
@@ -15,4 +16,5 @@ export function registerAllTopics(): void {
   registerReviewTopics()
   registerChapterTopics()
   registerPipelineTopics()
+  registerPlayerTopics()
 }

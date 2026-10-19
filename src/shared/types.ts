@@ -81,6 +81,7 @@ export type Severity = (typeof SEVERITIES)[number]
 export const ISSUE_CATEGORIES = [
   'typo',
   'grammar',
+  'layout',
   'accuracy',
   'term',
   'punctuation',
@@ -91,6 +92,9 @@ export const ISSUE_CATEGORIES = [
   'context'
 ] as const
 export type IssueCategory = (typeof ISSUE_CATEGORIES)[number]
+
+/** 当前审阅范围只覆盖这三类（v1.0.1 起） */
+export const REVIEW_SCOPE_CATEGORIES = ['typo', 'grammar', 'layout'] as const
 
 export const ISSUE_STATUSES = ['open', 'fixed', 'ignored', 'false_positive'] as const
 export type IssueStatus = (typeof ISSUE_STATUSES)[number]
@@ -105,6 +109,8 @@ export interface ReviewIssue {
   category: IssueCategory
   /** ASS 事件序号（从 1 开始，对应字幕行） */
   line: number | null
+  /** layout 问题涉及的第二行（上下排列检查） */
+  relatedLines?: number[] | null
   startMs: number | null
   endMs: number | null
   original: string
@@ -167,7 +173,7 @@ export interface ChapterInfo {
 }
 
 export interface ChapterDraftInfo {
-  /** 草稿：{翻译用}\{local}\{工作名}.chapters.draft.xml */
+  /** 草稿：{集目录}\{工作名}.chapters.draft.xml（未使用子目录时） */
   path: string
   updatedAt: string
   chapterCount: number
@@ -184,7 +190,7 @@ export interface SubtitleInfo {
   sha256: string
   importedAt: string
   sourceName: string
-  /** 导入时规范化到的编码，恒为 utf-8 */
+  /** 导入时规范化到的编码：utf-8-bom（VSFilter 需要 BOM 才能正确识别 UTF-8） */
   encoding: string
   lineCount: number
 }
@@ -196,6 +202,14 @@ export interface HumanLock {
   aiRunId: string
   note: string
   checklist: string[]
+}
+
+/** 审阅视频引用（每集可选，便于用不同片源校对） */
+export interface ReviewVideoRef {
+  path: string
+  setAt: string
+  /** 来源：用户选择 / 模板 InputFiles */
+  source: 'manual' | 'template'
 }
 
 /* ------------------------------------------------------------------ */
@@ -276,7 +290,7 @@ export interface ProjectMeta {
   /** 本地起始集号，默认 1 */
   localStart: number
   workNameTemplate: string
-  /** 翻译用子目录名，默认 [翻译用] */
+  /** 翻译用子目录名；空字符串表示不使用子目录（字幕/章节草稿直接放集目录） */
   subDirName: string
   /** 输出目录策略 */
   outputMode: 'episode-output' | 'project-release'
@@ -296,6 +310,8 @@ export interface EpisodeRecord {
   templateJson: string | null
   templateVpy: string | null
   subtitle: SubtitleInfo | null
+  /** 审阅用视频：用户为该集手动选择；为空时回退到模板 InputFiles[0] */
+  reviewVideo: ReviewVideoRef | null
   aiRunId: string | null
   aiVerdict: AiVerdict | null
   human: HumanLock | null
@@ -404,6 +420,16 @@ export interface PublishSettings {
   monitorIntervalMs: number
 }
 
+/** 审阅范围：只审对白与屏幕字的通顺、错别字、时间重叠时的上下排列 */
+export interface ReviewScopeSettings {
+  /** 样式名包含这些关键字 → 视为特效行，不送审、不检查 */
+  effectStyleKeywords: string[]
+  /** 样式名包含这些关键字 → 视为屏幕字（仍然审阅） */
+  screenStyleKeywords: string[]
+  /** 忽略 Comment 行（默认 true） */
+  excludeComments: boolean
+}
+
 export interface AppSettings {
   schemaVersion: number
   operator: string
@@ -411,6 +437,7 @@ export interface AppSettings {
   subDirName: string
   tools: ToolPaths
   dsh: DshSettings
+  review: ReviewScopeSettings
   chapter: ChapterSettings
   naming: NamingSettings
   mp4: Mp4Settings

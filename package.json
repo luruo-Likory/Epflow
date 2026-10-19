@@ -1,7 +1,7 @@
 {
   "name": "epflow",
   "productName": "EpFlow",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "番剧字幕审阅 · 压制 · 章节 · 发布流程规范化软件",
   "main": "dist/main/index.js",
   "author": {
@@ -40,10 +40,5 @@
     "typescript": "5.9.3",
     "vite": "7.3.7",
     "vitest": "3.2.7"
-  },
-  "allowScripts": {
-    "electron@40.10.6": true,
-    "electron-winstaller@5.4.0": true,
-    "esbuild@0.28.2": true
   }
 }

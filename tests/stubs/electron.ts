@@ -3,7 +3,8 @@ import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
 
-const base = path.join(os.tmpdir(), 'epflow-vitest-userdata')
+// 每个测试 worker 用独立目录，避免并行运行时 app-state.json 的原子写竞争
+const base = path.join(os.tmpdir(), `epflow-vitest-userdata-${process.pid}`)
 fs.mkdirSync(base, { recursive: true })
 
 export const app = {

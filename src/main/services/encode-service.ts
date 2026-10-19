@@ -24,7 +24,12 @@ export interface OutputCandidate {
 
 const OUTPUT_DIR_RE = /^[0-9A-Fa-f]{8}-\d{2}$/
 const EXCLUDED_SUFFIX = ['.lwi', '.part', '.tmp']
-const EXCLUDED_NAME = /(^~)|(\.before-chapters\.mkv$)/i
+// `01.mkv_.mkv` 是 OKEGui 写了一半的中间文件；`D_` 是 ReducePath 的临时工作目录
+const EXCLUDED_NAME = /(^~)|(\.before-chapters\.mkv$)|(\.mkv_)|(_\.mkv$)/i
+
+function isTempWorkPath(file: string): boolean {
+  return file.split(/[\\/]/).includes('D_')
+}
 
 export function isOutputDirName(name: string): boolean {
   return OUTPUT_DIR_RE.test(name)
@@ -36,11 +41,9 @@ export async function findOutputCandidates(
   startedAtMs: number,
   options: { minSizeMb: number; checkStability?: boolean }
 ): Promise<OutputCandidate[]> {
-  const roots = [
-    path.join(ep.dir, 'output'),
-    path.join(ep.dir, 'output', 'D_'),
-    path.join(ep.dir, 'D_')
-  ]
+  // OKEGui 的最终成品只会落在 output\XXXXXXXX-XX\ 下；
+  // D_\ 是 ReducePath 的临时工作目录，里面是写了一半的 mkv，绝不能当成品识别。
+  const roots = [path.join(ep.dir, 'output')]
   const minSize = Math.max(0, options.minSizeMb) * 1024 * 1024
   const candidates: OutputCandidate[] = []
 
@@ -51,6 +54,7 @@ export async function findOutputCandidates(
       const name = path.basename(file)
       if (EXCLUDED_NAME.test(name)) continue
       if (EXCLUDED_SUFFIX.some((s) => name.toLowerCase().endsWith(s))) continue
+      if (isTempWorkPath(file)) continue
       const st = statLong(file)
       if (!st || !st.isFile()) continue
       if (st.size < minSize) continue
@@ -72,6 +76,8 @@ export async function findOutputCandidates(
   for (const file of listFilesRecursive(path.join(ep.dir, 'output'), '.mkv', 3)) {
     const name = path.basename(file)
     if (EXCLUDED_NAME.test(name)) continue
+    if (isTempWorkPath(file)) continue
+    if (EXCLUDED_SUFFIX.some((s) => name.toLowerCase().endsWith(s))) continue
     if (candidates.some((c) => c.path.toLowerCase() === file.toLowerCase())) continue
     const st = statLong(file)
     if (!st || st.size < minSize) continue
@@ -162,6 +168,14 @@ export async function startEncode(
   const ep = store.getEpisode(localNo)
   await requireGate(rootPath, localNo, 'encode', settings)
 
+  // VSFilter/TextSubMod 不认「无 BOM 的 UTF-8」，会按 ANSI 解码造成乱码；门禁通过后补 BOM
+  try {
+    const { ensureUtf8BomForEncode } = await import('./subtitle-service')
+    await ensureUtf8BomForEncode(rootPath, localNo, settings.operator)
+  } catch (err) {
+    log.warn('subtitle BOM fix failed', { localNo, message: String(err) })
+  }
+
   const okegui = resolveTool('okegui')
   if (!okegui.exists) {
     throw new Error('未找到 OKEGui.exe，请在设置中指定路径')
@@ -178,9 +192,31 @@ export async function startEncode(
   const startedAt = nowIso()
   const startedAtMs = Date.now()
 
+  // 预检 OKEGui 配置：它按安装目录读取 OKEGuiConfig.json，vspipe 路径写在这里
   try {
+    const configPath = path.join(path.dirname(okegui.path), 'OKEGuiConfig.json')
+    if (existsLong(configPath)) {
+      const config = JSON.parse(fs.readFileSync(toLongPath(configPath), 'utf8')) as { vspipePath?: string }
+      if (config.vspipePath && !existsLong(config.vspipePath)) {
+        throw new Error(
+          `OKEGui 配置里的 vspipe 不存在：${config.vspipePath}。请检查 OKEGui 安装目录下的 OKEGuiConfig.json`
+        )
+      }
+    }
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      log.warn('OKEGuiConfig.json 解析失败，跳过预检')
+    } else {
+      throw err
+    }
+  }
+
+  try {
+    // 关键：OKEGui 按「当前工作目录」读取 OKEGuiConfig.json（vspipe/rpchecker 路径都在里面），
+    // 用集目录作为 cwd 会导致它找不到 vspipe.exe。桌面临捷方式的工作目录就是安装目录，所以手动启动正常。
+    const okeguiDir = path.dirname(okegui.path)
     const child = spawn(okegui.path, [], {
-      cwd: ep.dir,
+      cwd: okeguiDir,
       detached: true,
       stdio: 'ignore',
       windowsHide: false
@@ -269,7 +305,16 @@ async function tick(rootPath: string, localNo: string, settings: AppSettings, st
     })
     return
   }
-  await acceptOutput(rootPath, localNo, candidates[0]!.path, settings)
+  await tryAcceptOutput(rootPath, localNo, candidates[0]!.path, settings)
+}
+
+/** 自动识别时吞掉「还没写完」的异常，等下一轮再试；超时由 tick 统一处理 */
+async function tryAcceptOutput(rootPath: string, localNo: string, filePath: string, settings: AppSettings): Promise<void> {
+  try {
+    await acceptOutput(rootPath, localNo, filePath, settings)
+  } catch (err) {
+    log.warn('output candidate rejected', { localNo, filePath, message: String(err) })
+  }
 }
 
 export async function acceptOutput(
@@ -287,6 +332,10 @@ export async function acceptOutput(
   const ffprobe = resolveTool('ffprobe')
   let probe: MediaProbe | null = null
   if (ffprobe.exists) probe = await probeMedia(filePath, ffprobe.path)
+  // 半成品 / 正在写入的文件探测不到时长，直接拒绝，避免把 OKEGui 的中间文件当成品
+  if (ffprobe.exists && (!probe || !probe.durationMs)) {
+    throw new Error(`成品探测不到有效时长，可能仍在写入或已损坏：${filePath}`)
+  }
 
   let hash: string | null = null
   if (stat.size < 200 * 1024 * 1024) {

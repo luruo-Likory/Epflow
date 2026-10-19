@@ -3,7 +3,7 @@ import path from 'node:path'
 import { z } from 'zod'
 import type { AppSettings, EpisodeRecord, ProjectMeta, ProjectSnapshot } from '@shared/types'
 import { nowIso } from '@shared/time'
-import { validateAnimeName, sanitizeFileName, validateReleaseTemplate } from '@shared/filename'
+import { validateAnimeName, sanitizeFileName, validateReleaseTemplate, validateSubDirName } from '@shared/filename'
 import { formatRelease, toReleaseTemplate, findReleaseCandidates, chooseDefaultCandidate } from '@shared/release-name'
 import { createVariableMap } from '@shared/template-vars'
 import { ProjectStore, openStore } from '../store/repository'
@@ -23,7 +23,8 @@ export const createProjectInputSchema = z.object({
   episodeCount: z.number().int().min(1).max(999),
   localStart: z.number().int().min(1).max(999).default(1),
   workNameTemplate: z.string().min(1).default('{anime} - {ep}'),
-  subDirName: z.string().min(1).default('[翻译用]'),
+  /** 空字符串 = 不使用「翻译用」子目录，文件直接放集目录 */
+  subDirName: z.string().max(80).default(''),
   outputMode: z.enum(['episode-output', 'project-release']).default('episode-output')
 })
 
@@ -65,7 +66,7 @@ export function normalizeInput(input: CreateProjectInput): NormalizedCreateProje
     episodeCount: input.episodeCount,
     localStart: input.localStart ?? 1,
     workNameTemplate: input.workNameTemplate || '{anime} - {ep}',
-    subDirName: input.subDirName || '[翻译用]',
+    subDirName: (input.subDirName ?? '').trim(),
     outputMode: input.outputMode ?? 'episode-output'
   }
 }
@@ -147,7 +148,8 @@ export function buildEpisodes(meta: ProjectMeta, settings?: Partial<AppSettings>
     const releaseNoNum = meta.releaseEpisodeBase + i
     const releaseNo = formatRelease(releaseNoNum, meta.releaseEpisodeWidth)
     const dir = path.join(meta.rootPath, localNo)
-    const subDir = path.join(meta.rootPath, meta.subDirName, localNo)
+    // 子目录名为空时，字幕/章节草稿等直接放在集目录下（与 json/vpy/output 同级）
+    const subDir = meta.subDirName ? path.join(meta.rootPath, meta.subDirName, localNo) : dir
     const output = meta.outputMode === 'project-release'
       ? path.join(meta.rootPath, 'release')
       : path.join(dir, 'output')
@@ -179,6 +181,7 @@ export function buildEpisodes(meta: ProjectMeta, settings?: Partial<AppSettings>
       templateJson: null,
       templateVpy: null,
       subtitle: null,
+      reviewVideo: null,
       aiRunId: null,
       aiVerdict: null,
       human: null,
@@ -215,6 +218,8 @@ export function previewProject(input: CreateProjectInput): ProjectPreview {
   }
   if (full.episodeCount < 1 || full.episodeCount > 999) errors.push('总集数需在 1–999 之间')
   if (!full.releaseNameTemplate.includes('{release}')) errors.push('发布名模板缺少 {release}')
+  const subDirError = validateSubDirName(full.subDirName)
+  if (subDirError) errors.push(subDirError)
 
   const meta = buildProjectMeta(input, '')
   const episodes = buildEpisodes(meta)
@@ -225,7 +230,7 @@ export function previewProject(input: CreateProjectInput): ProjectPreview {
     if (existsLong(ep.dir)) existingLocalDirs.push(ep.localNo)
     else missingLocalDirs.push(ep.localNo)
   }
-  const existingSubDir = existsLong(path.join(meta.rootPath, meta.subDirName))
+  const existingSubDir = meta.subDirName ? existsLong(path.join(meta.rootPath, meta.subDirName)) : false
   const hasState = ProjectStore.exists(meta.rootPath)
 
   if (rootExists && !hasState) {
@@ -240,14 +245,22 @@ export function previewProject(input: CreateProjectInput): ProjectPreview {
   const tree: TreeLine[] = [
     { depth: 0, name: path.basename(meta.rootPath) || meta.rootPath, kind: 'dir', note: '项目根' },
     { depth: 1, name: ProjectStore.stateDir(''), kind: 'dir', note: '软件状态库' },
-    { depth: 1, name: 'project.json / episodes.json', kind: 'file', note: '可读快照' },
-    { depth: 1, name: meta.subDirName, kind: 'dir', note: '翻译用' }
+    { depth: 1, name: 'project.json / episodes.json', kind: 'file', note: '可读快照' }
   ]
-  for (const ep of episodes.slice(0, 4)) {
-    tree.push({ depth: 2, name: ep.localNo, kind: 'dir' })
-    tree.push({ depth: 3, name: `${ep.workName}.ass`, kind: 'file', note: '字幕（导入后生成）' })
+  if (meta.subDirName) {
+    tree.push({ depth: 1, name: meta.subDirName, kind: 'dir', note: '翻译用' })
   }
-  if (episodes.length > 4) tree.push({ depth: 2, name: `… 共 ${episodes.length} 集`, kind: 'dir' })
+  const epDepth = meta.subDirName ? 2 : 1
+  for (const ep of episodes.slice(0, 4)) {
+    tree.push({ depth: epDepth, name: ep.localNo, kind: 'dir' })
+    tree.push({
+      depth: epDepth + 1,
+      name: `${ep.workName}.ass`,
+      kind: 'file',
+      note: meta.subDirName ? '字幕（导入后生成）' : '字幕（与 json/vpy 同目录）'
+    })
+  }
+  if (episodes.length > 4) tree.push({ depth: epDepth, name: `… 共 ${episodes.length} 集`, kind: 'dir' })
   tree.push({ depth: 1, name: '01 … nn', kind: 'dir', note: '集目录（json/vpy/mkv/output）' })
 
   return {
@@ -310,11 +323,11 @@ export function createProject(input: CreateProjectInput, options: CreateProjectO
   // 创建目录树（只增不删）
   ensureDir(meta.rootPath)
   ensureDir(ProjectStore.stateDir(meta.rootPath))
-  ensureDir(path.join(meta.rootPath, meta.subDirName))
+  if (meta.subDirName) ensureDir(path.join(meta.rootPath, meta.subDirName))
   if (meta.outputMode === 'project-release') ensureDir(path.join(meta.rootPath, 'release'))
   for (const ep of episodes) {
     ensureDir(ep.dir)
-    ensureDir(ep.subDir)
+    if (ep.subDir !== ep.dir) ensureDir(ep.subDir)
     if (meta.outputMode === 'episode-output') ensureDir(path.join(ep.dir, 'output'))
   }
 
@@ -460,8 +473,30 @@ export function scanMaterialRoot(materialRoot: string): DetectedProject[] {
   return out
 }
 
-export function setReleaseNo(rootPath: string, localNo: string, releaseNo: string, operator: string): ProjectSnapshot {
+const VIDEO_EXTENSIONS = new Set(['.mkv', '.mp4', '.avi', '.mov', '.webm', '.ts', '.m2ts', '.flv', '.wmv', '.mpg', '.mpeg'])
+
+/** 为某一集设置审阅用视频（传 null 表示恢复为模板源视频） */
+export function setReviewVideo(
+  rootPath: string,
+  localNo: string,
+  videoPath: string | null,
+  operator: string
+): EpisodeRecord {
   const store = openStore(rootPath)
+  const ep = store.getEpisode(localNo)
+  if (videoPath) {
+    if (!existsLong(videoPath)) throw new Error(`视频文件不存在：${videoPath}`)
+    const ext = path.extname(videoPath).toLowerCase()
+    if (!VIDEO_EXTENSIONS.has(ext)) throw new Error(`不支持的视频格式：${ext}`)
+  }
+  store.updateEpisode(localNo, {
+    reviewVideo: videoPath ? { path: videoPath, setAt: nowIso(), source: 'manual' } : null
+  })
+  store.appendAudit('episode.video', { path: videoPath }, ep.id, operator)
+  return store.getEpisode(localNo)
+}
+
+export function setReleaseNo(rootPath: string, localNo: string, releaseNo: string, operator: string): ProjectSnapshot {  const store = openStore(rootPath)
   const ep = store.getEpisode(localNo)
   const prev = ep.releaseNo
   store.updateEpisode(localNo, { releaseNo })
@@ -485,8 +520,117 @@ export function updateProjectMeta(
       store.updateEpisode(ep.localNo, { workName: computed.workName })
     }
   }
+  // 翻译用子目录变化：把字幕/章节草稿迁到新位置，保证路径与目录布局一致
+  if (patch.subDirName !== undefined) {
+    const result = emptyLayoutResult()
+    for (const ep of [...store.episodes]) relocateEpisodeFiles(store, ep, targetSubDirOf(next, ep), result)
+    store.appendAudit('project.layout-move', { moved: result.moved.length, skipped: result.skipped.length }, null, operator)
+  }
   store.appendAudit('project.update', patch as Record<string, unknown>, null, operator)
   return { project: store.project, episodes: store.episodes }
+}
+
+export interface LayoutFileMove {
+  from: string
+  to: string
+}
+
+export interface LayoutMigrationResult {
+  moved: LayoutFileMove[]
+  skipped: string[]
+  removedDirs: string[]
+  removedBackups: string[]
+}
+
+function emptyLayoutResult(): LayoutMigrationResult {
+  return { moved: [], skipped: [], removedDirs: [], removedBackups: [] }
+}
+
+function targetSubDirOf(meta: ProjectMeta, ep: EpisodeRecord): string {
+  return meta.subDirName ? path.join(meta.rootPath, meta.subDirName, ep.localNo) : ep.dir
+}
+
+/** 把单个文件移动到目标目录；文件已在目标目录或不存在时原样返回 */
+function moveFileInto(filePath: string | null | undefined, dir: string, result: LayoutMigrationResult): string | null {
+  if (!filePath || !existsLong(filePath)) return filePath ?? null
+  const fromDir = path.resolve(path.dirname(filePath)).toLowerCase()
+  if (fromDir === path.resolve(dir).toLowerCase()) return filePath
+  const target = path.join(dir, path.basename(filePath))
+  if (existsLong(target)) {
+    result.skipped.push(`${filePath}（目标已存在：${target}）`)
+    return filePath
+  }
+  ensureDir(dir)
+  fs.renameSync(toLongPath(filePath), toLongPath(target))
+  result.moved.push({ from: filePath, to: target })
+  // 迁移时顺手清掉 EpFlow 自己生成的备份，避免它们继续留在旧目录里
+  for (const suffix of ['.orig', '.bak']) {
+    const sidecar = `${filePath}${suffix}`
+    if (!existsLong(sidecar)) continue
+    try {
+      fs.rmSync(toLongPath(sidecar), { force: true })
+      result.removedBackups.push(sidecar)
+    } catch {
+      /* 删除失败不影响迁移 */
+    }
+  }
+  return target
+}
+
+/** 把某一集的字幕/章节草稿迁到 targetDir，并同步状态里的路径 */
+function relocateEpisodeFiles(
+  store: ProjectStore,
+  ep: EpisodeRecord,
+  targetDir: string,
+  result: LayoutMigrationResult
+): void {
+  const patch: Partial<EpisodeRecord> = {}
+  if (ep.subtitle) {
+    const moved = moveFileInto(ep.subtitle.path, targetDir, result)
+    if (moved && moved !== ep.subtitle.path) patch.subtitle = { ...ep.subtitle, path: moved }
+  }
+  if (ep.chapterDraft) {
+    const moved = moveFileInto(ep.chapterDraft.path, targetDir, result)
+    if (moved && moved !== ep.chapterDraft.path) patch.chapterDraft = { ...ep.chapterDraft, path: moved }
+  }
+  if (ep.subDir !== targetDir) patch.subDir = targetDir
+  if (Object.keys(patch).length > 0) store.updateEpisode(ep.localNo, patch)
+}
+
+function cleanupEmptyDir(dir: string, result: LayoutMigrationResult): void {
+  try {
+    fs.rmdirSync(toLongPath(dir))
+    result.removedDirs.push(dir)
+  } catch {
+    /* 目录不存在或非空：保留 */
+  }
+}
+
+/**
+ * 把项目从「根目录/翻译用/集号/」布局迁移成「根目录/集号/」扁平布局：
+ * 字幕、章节草稿等直接放到集目录，与 json/vpy/output 同级。
+ * 只移动文件、不改文件内容；迁移后项目 subDirName 置空。
+ */
+export function migrateToFlatLayout(rootPath: string, operator: string): LayoutMigrationResult {
+  const store = openStore(rootPath)
+  const meta = store.project
+  const oldSubName = meta.subDirName
+  const result = emptyLayoutResult()
+
+  for (const ep of [...store.episodes]) relocateEpisodeFiles(store, ep, ep.dir, result)
+
+  if (oldSubName) {
+    store.updateProject({ subDirName: '' })
+    for (const ep of store.episodes) cleanupEmptyDir(path.join(rootPath, oldSubName, ep.localNo), result)
+    cleanupEmptyDir(path.join(rootPath, oldSubName), result)
+  }
+  store.appendAudit(
+    'project.layout-flat',
+    { from: oldSubName, moved: result.moved.length, removedDirs: result.removedDirs.length },
+    null,
+    operator
+  )
+  return result
 }
 
 export function resolveReleaseTemplateFromName(name: string): string {

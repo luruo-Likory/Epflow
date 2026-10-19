@@ -6,7 +6,7 @@ import { parseAss, type AssDocument } from '@shared/ass-parser'
 import { ProjectStore, openStore } from '../store/repository'
 import { ensureDir, existsLong, toLongPath } from '../util/paths'
 import { sha256File } from '../util/hash'
-import { normalizeToUtf8, looksLikeAss } from '../util/encoding'
+import { normalizeToUtf8, looksLikeAss, stripUtf8Bom, withUtf8Bom } from '../util/encoding'
 import { scoped } from '../util/logger'
 import { writeFileAtomic } from '../store/atomic'
 
@@ -26,7 +26,7 @@ function assertAss(text: string, fileName: string): void {
 }
 
 /**
- * 导入字幕：编码规范化 → .orig 备份 → 复制到 [翻译用]\{local}\ → 哈希 → SUB_IMPORTED
+ * 导入字幕：编码规范化 → .orig 备份 → 复制到字幕目录（默认集目录）→ 哈希 → SUB_IMPORTED
  */
 export async function importSubtitle(
   rootPath: string,
@@ -52,7 +52,7 @@ export async function importSubtitle(
   if (existsLong(target)) {
     fs.copyFileSync(toLongPath(target), toLongPath(orig))
   }
-  writeFileAtomic(target, text)
+  writeFileAtomic(target, withUtf8Bom(text))
   const hash = await sha256File(target)
   const doc = parseAss(text)
 
@@ -61,7 +61,7 @@ export async function importSubtitle(
     sha256: hash,
     importedAt: nowIso(),
     sourceName: path.basename(sourceFile),
-    encoding: 'utf-8',
+    encoding: 'utf-8-bom',
     lineCount: doc.events.length
   }
 
@@ -107,12 +107,12 @@ export async function readSubtitle(rootPath: string, localNo: string): Promise<S
   return { info: ep.subtitle, document, exists: true, currentHash }
 }
 
-/** 读取字幕原始文本（用于导出/查找替换） */
+/** 读取字幕原始文本（用于导出/查找替换）；BOM 由写入层统一补，不暴露给调用方 */
 export function readSubtitleText(rootPath: string, localNo: string): string | null {
   const store = openStore(rootPath)
   const ep = store.getEpisode(localNo)
   if (!ep.subtitle?.path || !existsLong(ep.subtitle.path)) return null
-  return fs.readFileSync(toLongPath(ep.subtitle.path), 'utf8')
+  return stripUtf8Bom(fs.readFileSync(toLongPath(ep.subtitle.path), 'utf8'))
 }
 
 /**
@@ -164,13 +164,46 @@ export function writeSubtitleText(rootPath: string, localNo: string, text: strin
   const store = openStore(rootPath)
   const ep = store.getEpisode(localNo)
   if (!ep.subtitle?.path) throw new Error('该集尚未导入字幕')
-  writeFileAtomic(ep.subtitle.path, text)
+  writeFileAtomic(ep.subtitle.path, withUtf8Bom(text))
   store.appendAudit('subtitle.edit', { path: ep.subtitle.path }, ep.id, actor)
 }
 
 export function subtitlePathOf(rootPath: string, localNo: string): string | null {
   const store = openStore(rootPath)
   return store.getEpisode(localNo).subtitle?.path ?? null
+}
+
+export interface BomFixResult {
+  fixed: boolean
+  hash: string | null
+}
+
+/**
+ * 压制前兜底：字幕若是「UTF-8 无 BOM」，VSFilter/TextSubMod 会按系统 ANSI(GBK) 解码导致整片乱码。
+ * 这里在内容未变（哈希与记录一致）的前提下补 BOM，并同步字幕哈希与人工审阅哈希。
+ * 只在门禁通过后调用，避免掩盖外部改动。
+ */
+export async function ensureUtf8BomForEncode(
+  rootPath: string,
+  localNo: string,
+  actor: string
+): Promise<BomFixResult> {
+  const store = openStore(rootPath)
+  const ep = store.getEpisode(localNo)
+  const file = ep.subtitle?.path
+  if (!file || !existsLong(file)) return { fixed: false, hash: null }
+  const buf = fs.readFileSync(toLongPath(file))
+  if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) return { fixed: false, hash: null }
+  const text = stripUtf8Bom(buf.toString('utf8'))
+  writeFileAtomic(file, withUtf8Bom(text))
+  const hash = await sha256File(file)
+  store.updateEpisode(localNo, {
+    subtitle: { ...ep.subtitle!, sha256: hash, encoding: 'utf-8-bom' },
+    human: ep.human ? { ...ep.human, subtitleHash: hash } : null
+  })
+  store.appendAudit('subtitle.bom-fix', { path: file, from: ep.subtitle?.sha256, to: hash }, ep.id, actor)
+  log.info('subtitle BOM added before encode', { localNo, hash })
+  return { fixed: true, hash }
 }
 
 export function openSubtitleWithExternal(rootPath: string, localNo: string, aegisubPath: string): string {

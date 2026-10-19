@@ -14,7 +14,9 @@ import type {
 } from '@shared/types'
 import { ISSUE_CATEGORIES, SEVERITIES } from '@shared/types'
 import { nowIso } from '@shared/time'
-import { parseAss, validateAssStructure, type AssDocument } from '@shared/ass-parser'
+import { parseAss, type AssDocument } from '@shared/ass-parser'
+import type { ReviewScopeSettings } from '@shared/types'
+import { classifyEvent, filterReviewableEvents, findOverlapLayoutIssues, type AssEventKind } from '@shared/ass-classify'
 import { ProjectStore, openStore } from '../store/repository'
 import { randomId } from '../util/hash'
 import { existsLong, toLongPath } from '../util/paths'
@@ -26,11 +28,12 @@ import { sha256Text } from '../util/hash'
 
 const log = scoped('review')
 
-const aiIssueSchema = z.object({
+export const aiIssueSchema = z.object({
   id: z.string().optional(),
   severity: z.string(),
   category: z.string().optional(),
   line: z.number().nullable().optional(),
+  lines: z.array(z.number()).optional(),
   start_ms: z.number().nullable().optional(),
   end_ms: z.number().nullable().optional(),
   original: z.string().optional(),
@@ -64,26 +67,14 @@ export interface ReviewOutcome {
 }
 
 /* ------------------------------------------------------------------ */
-/* 本地预检                                                            */
+/* 本地检查：只做「同一时间两句是否上下排列」                            */
 /* ------------------------------------------------------------------ */
-
-export interface PrecheckConfig {
-  /** 单行允许的最大显示宽度占画面宽度的比例 */
-  maxWidthRatio: number
-  minDurationMs: number
-  maxDurationMs: number
-}
-
-export const DEFAULT_PRECHECK: PrecheckConfig = {
-  maxWidthRatio: 0.92,
-  minDurationMs: 500,
-  maxDurationMs: 8000
-}
 
 interface DraftIssue {
   severity: Severity
   category: IssueCategory
   line: number | null
+  relatedLines: number[] | null
   startMs: number | null
   endMs: number | null
   original: string
@@ -92,151 +83,28 @@ interface DraftIssue {
   confidence: number | null
 }
 
-export function localPrecheck(doc: AssDocument, cfg: PrecheckConfig = DEFAULT_PRECHECK): DraftIssue[] {
-  const out: DraftIssue[] = []
-  const styleMap = new Map(doc.styles.map((s) => [s.name, s]))
-  const dialogues = doc.events.filter((e) => !e.isComment)
-  const maxWidthPx = doc.playResX * cfg.maxWidthRatio
-
-  for (let i = 0; i < dialogues.length; i += 1) {
-    const e = dialogues[i]!
-    const push = (draft: Omit<DraftIssue, 'line' | 'startMs' | 'endMs' | 'original'> & { original?: string }) => {
-      out.push({
-        line: e.index,
-        startMs: e.startMs,
-        endMs: e.endMs,
-        original: draft.original ?? e.plain.slice(0, 120),
-        ...draft
-      })
-    }
-
-    const duration = e.endMs - e.startMs
-    if (duration <= 0) {
-      push({
-        severity: 'major',
-        category: 'timing',
-        suggestion: '修正结束时间，确保晚于开始时间',
-        reason: `时长异常（${duration} ms）`,
-        confidence: 1
-      })
-    } else if (duration < cfg.minDurationMs) {
-      push({
-        severity: 'minor',
-        category: 'timing',
-        suggestion: '确认是否需要延长停留时间',
-        reason: `时长过短（${duration} ms < ${cfg.minDurationMs} ms）`,
-        confidence: 0.9
-      })
-    } else if (duration > cfg.maxDurationMs) {
-      push({
-        severity: 'minor',
-        category: 'timing',
-        suggestion: '考虑拆分或缩短该行',
-        reason: `时长过长（${duration} ms > ${cfg.maxDurationMs} ms）`,
-        confidence: 0.8
-      })
-    }
-
-    if (!e.plain.trim()) {
-      push({
-        severity: 'major',
-        category: 'omission',
-        suggestion: '删除空行或补全对白',
-        reason: '对白文本为空或仅含 ASS 标签',
-        confidence: 1
-      })
-    }
-
-    const opens = (e.text.match(/\{/g) ?? []).length
-    const closes = (e.text.match(/\}/g) ?? []).length
-    if (opens !== closes) {
-      push({
-        severity: 'major',
-        category: 'ass_tag',
-        suggestion: '补全或删除多余的 { }',
-        reason: `花括号不配对（{ ×${opens}，} ×${closes}）`,
-        confidence: 1
-      })
-    }
-    const newlines = (e.text.match(/\\N/gi) ?? []).length
-    if (newlines > 2) {
-      push({
-        severity: 'minor',
-        category: 'ass_tag',
-        suggestion: '减少硬换行，避免超出画面',
-        reason: `单行含 ${newlines} 个硬换行`,
-        confidence: 0.85
-      })
-    }
-
-    if (e.style && styleMap.size > 0 && !styleMap.has(e.style)) {
-      push({
-        severity: 'major',
-        category: 'ass_tag',
-        suggestion: '改为已定义样式或补充样式定义',
-        reason: `样式 "${e.style}" 不存在`,
-        confidence: 1
-      })
-    }
-
-    const style = styleMap.get(e.style)
-    if (style && style.fontsize > 0) {
-      const estimated = estimateWidth(e.plain, style.fontsize)
-      if (estimated > maxWidthPx) {
-        push({
-          severity: 'minor',
-          category: 'style',
-          suggestion: '考虑换行或缩小字号',
-          reason: `按样式估算宽度约 ${Math.round(estimated)}px，超过画面可用宽度 ${Math.round(maxWidthPx)}px`,
-          confidence: 0.6
-        })
-      }
-    }
-
-    // 时间重叠：与后一条比较
-    const next = dialogues[i + 1]
-    if (next && e.endMs > next.startMs) {
-      push({
-        severity: 'major',
-        category: 'timing',
-        suggestion: '缩短本行结束时间或后移下一行',
-        reason: `与第 ${next.index} 行时间重叠 ${e.endMs - next.startMs} ms`,
-        confidence: 0.95
-      })
-    }
-  }
-
-  for (const tagIssue of validateAssStructure(doc)) {
-    const severity: Severity = tagIssue.kind === 'empty-text' ? 'major' : 'minor'
-    if (out.some((o) => o.line === tagIssue.line && o.category === 'ass_tag')) continue
-    out.push({
-      severity,
-      category: 'ass_tag',
-      line: tagIssue.line,
-      startMs: null,
-      endMs: null,
-      original: '',
-      suggestion: '修复该行的 ASS 标签',
-      reason: tagIssue.detail,
-      confidence: 1
-    })
-  }
-
-  return out
+/**
+ * 审阅范围收敛为三类：错别字 / 通顺 / 上下排列。
+ * 其中只有「上下排列」能本地判断：时间重叠 + 同一样式 + 无定位标签 → 两句会叠在同一位置。
+ */
+export function localPrecheck(
+  doc: AssDocument,
+  scope?: Partial<ReviewScopeSettings> | null
+): DraftIssue[] {
+  const findings = findOverlapLayoutIssues(doc.events, scope)
+  return findings.map((finding) => ({
+    severity: 'major',
+    category: 'layout',
+    line: finding.first.index,
+    relatedLines: [finding.first.index, finding.second.index],
+    startMs: finding.first.startMs,
+    endMs: Math.max(finding.first.endMs, finding.second.endMs),
+    original: `${finding.first.plain} / ${finding.second.plain}`.slice(0, 200),
+    suggestion: '合并成一条对白并用 \\N 上下排列，或给其中一条加对齐/定位（\\an7 / \\an9 / \\pos）',
+    reason: finding.reason,
+    confidence: 1
+  }))
 }
-
-function estimateWidth(plain: string, fontSize: number): number {
-  let units = 0
-  for (const ch of plain) {
-    const code = ch.codePointAt(0) ?? 0
-    if (code >= 0x2e80) units += 1
-    else if (/\s/.test(ch)) units += 0.3
-    else units += 0.55
-  }
-  return units * fontSize
-}
-
-/* ------------------------------------------------------------------ */
 /* 结果解析                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -356,6 +224,7 @@ function buildIssues(
       severity: draft.severity,
       category: draft.category,
       line: draft.line,
+      relatedLines: draft.relatedLines,
       startMs: draft.startMs,
       endMs: draft.endMs,
       original: draft.original,
@@ -382,6 +251,7 @@ function buildIssues(
         severity: normalizeSeverity(item.severity),
         category: normalizeCategory(item.category),
         line: item.line ?? null,
+        relatedLines: item.lines && item.lines.length > 0 ? item.lines : null,
         startMs: item.start_ms ?? null,
         endMs: item.end_ms ?? null,
         original: item.original ?? '',
@@ -413,13 +283,16 @@ export function buildPromptForEpisode(
   rootPath: string,
   localNo: string,
   settings: AppSettings
-): { prompt: string; chunks: number; promptFile: string } {
+): { prompt: string; chunks: number; promptFile: string; reviewedLines: number; skippedLines: number } {
   const store = openStore(rootPath)
   const ep = store.getEpisode(localNo)
   const doc = readDocument(rootPath, localNo)
-  const dialogues = doc.events.filter((e) => !e.isComment)
-  const chunks = chunkEvents(dialogues, 24_000)
-  const rows = chunks.map((chunk) => formatEventRows(chunk)).join('\n')
+  const reviewable = filterReviewableEvents(doc.events, settings.review)
+  const kinds = new Map<number, AssEventKind>(
+    reviewable.map((e) => [e.index, classifyEvent(e, settings.review)])
+  )
+  const chunks = chunkEvents(reviewable, 24_000)
+  const rows = chunks.map((chunk) => formatEventRows(chunk, kinds)).join('\n')
   const glossary = readGlossary(rootPath)
   const prompt = buildPrompt(
     {
@@ -435,8 +308,14 @@ export function buildPromptForEpisode(
   fs.mkdirSync(dir, { recursive: true })
   const promptFile = path.join(dir, `${ep.localNo}-${PROMPT_VERSION}.md`)
   fs.writeFileSync(promptFile, prompt, 'utf8')
-  store.appendAudit('review.prompt', { chunkCount: chunks.length, promptHash: sha256Text(prompt).slice(0, 12) }, ep.id, settings.operator)
-  return { prompt, chunks: chunks.length, promptFile }
+  const skippedLines = doc.events.length - reviewable.length
+  store.appendAudit(
+    'review.prompt',
+    { chunkCount: chunks.length, promptHash: sha256Text(prompt).slice(0, 12), reviewedLines: reviewable.length, skippedLines },
+    ep.id,
+    settings.operator
+  )
+  return { prompt, chunks: chunks.length, promptFile, reviewedLines: reviewable.length, skippedLines }
 }
 
 export function readGlossary(rootPath: string): string {
@@ -485,15 +364,20 @@ export async function runAiReview(
   toReviewing(store, localNo, actor)
   const ep = store.getEpisode(localNo)
   const doc = readDocument(rootPath, localNo)
-  const local = localPrecheck(doc)
-  const dialogues = doc.events.filter((e) => !e.isComment)
-  const chunks = chunkEvents(dialogues, 24_000)
+  const local = localPrecheck(doc, settings.review)
+  const reviewable = filterReviewableEvents(doc.events, settings.review)
+  const kinds = new Map<number, AssEventKind>(
+    reviewable.map((e) => [e.index, classifyEvent(e, settings.review)])
+  )
+  const chunks = chunkEvents(reviewable, 24_000)
   const started = Date.now()
 
   let lastRaw = ''
   let parsed: AiResponse | null = null
   let parseError: string | null = null
   const warnings: string[] = []
+  const skipped = doc.events.length - reviewable.length
+  if (skipped > 0) warnings.push(`已跳过 ${skipped} 行特效/注释，只审阅对白与屏幕字`)
 
   for (let i = 0; i < chunks.length; i += 1) {
     const prompt = buildPrompt(
@@ -504,7 +388,7 @@ export async function runAiReview(
         glossary: readGlossary(rootPath),
         recap: ''
       },
-      formatEventRows(chunks[i]!)
+      formatEventRows(chunks[i]!, kinds)
     )
     let attempts = 0
     const maxAttempts = Math.max(1, settings.dsh.retries + 1)
@@ -584,7 +468,7 @@ export async function submitReviewJson(
   if (!outcome.ok) throw new Error(outcome.error)
   const ep = store.getEpisode(localNo)
   const doc = readDocument(rootPath, localNo)
-  const local = localPrecheck(doc)
+  const local = localPrecheck(doc, settings.review)
   toReviewing(store, localNo, actor)
   const runId = randomId('run')
   const issues = buildIssues(outcome.data, local, runId, ep.id, store, actor)
@@ -637,7 +521,30 @@ export function setIssueStatus(
     resolvedBy: actor
   })
   store.appendAudit('issue.status', { issueId, status, note }, issue.episodeId, actor)
+  reconcileAiState(store, issue.episodeId, actor)
   return updated
+}
+
+/**
+ * 问题处理完后同步 AI 结论与状态：
+ * - 没有未处理的 blocker/major → 自动从 AI_REJECTED 进入 AI_PASSED（解锁人工审阅）
+ * - 已通过后又把阻断问题改回未处理 → 回退 AI_REJECTED
+ */
+function reconcileAiState(store: ProjectStore, episodeId: string, actor: string): void {
+  const ep = store.getEpisodeById(episodeId)
+  if (!ep) return
+  if (ep.state !== 'AI_REJECTED' && ep.state !== 'AI_PASSED') return
+  const run = store.latestRun(ep.id)
+  if (!run) return
+  const issues = store.issuesOf(ep.id, run.id)
+  const verdict = decideVerdict(issues)
+  if (verdict === 'pass' && ep.state === 'AI_REJECTED') {
+    store.updateEpisode(ep.localNo, { aiVerdict: 'pass' })
+    store.transition(ep.localNo, 'AI_PASSED', 'review.auto-pass', { issueCount: issues.length }, actor)
+  } else if (verdict === 'fail' && ep.state === 'AI_PASSED') {
+    store.updateEpisode(ep.localNo, { aiVerdict: 'fail' })
+    store.transition(ep.localNo, 'AI_REJECTED', 'review.reopen', null, actor)
+  }
 }
 
 /** 强制通过：仅当设置允许；所有未处理的 blocker/major 记为 ignored 并留痕 */

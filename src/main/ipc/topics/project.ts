@@ -5,20 +5,19 @@ import {
   createProject,
   createProjectInputSchema,
   listProjects,
+  migrateToFlatLayout,
   openProject,
   previewProject,
   recoverProject,
   scanMaterialRoot,
   setReleaseNo,
+  setReviewVideo,
   updateProjectMeta
 } from '../../services/project-service'
 import { openStore } from '../../store/repository'
 import { checkAllGates } from '../../services/gate-service'
 import { listIssues } from '../../services/review-service'
-import { nowIso } from '@shared/time'
-import fs from 'node:fs'
-import path from 'node:path'
-import { appendAuditEntries } from '../../services/audit-service'
+import { broadcast } from '../events'
 
 const rootPath = z.object({ rootPath: z.string().min(1) })
 
@@ -80,6 +79,10 @@ export function registerProjectTopics(): void {
 
   handle('project:recover', rootPath, async ({ rootPath: root }) => recoverProject(root, getSettings().operator))
 
+  handle('project:migrate-layout', rootPath, ({ rootPath: root }) =>
+    migrateToFlatLayout(root, getSettings().operator)
+  )
+
   handle(
     'episode:detail',
     z.object({ rootPath: z.string().min(1), localNo: z.string().min(1) }),
@@ -99,6 +102,20 @@ export function registerProjectTopics(): void {
   )
 
   handle(
+    'episode:set-video',
+    z.object({
+      rootPath: z.string().min(1),
+      localNo: z.string().min(1),
+      path: z.string().nullable()
+    }),
+    ({ rootPath: root, localNo, path: videoPath }) => {
+      const ep = setReviewVideo(root, localNo, videoPath, getSettings().operator)
+      broadcast('episode:state', { localNo, state: ep.state })
+      return ep
+    }
+  )
+
+  handle(
     'episode:note',
     z.object({ rootPath: z.string().min(1), localNo: z.string().min(1), note: z.string() }),
     ({ rootPath: root, localNo, note }) => {
@@ -110,62 +127,4 @@ export function registerProjectTopics(): void {
     }
   )
 
-  handle(
-    'audit:list',
-    z.object({
-      rootPath: z.string().min(1),
-      filter: z
-        .object({
-          action: z.string().optional(),
-          localNo: z.string().optional(),
-          from: z.string().optional(),
-          to: z.string().optional(),
-          limit: z.number().int().positive().max(5000).optional()
-        })
-        .optional()
-    }),
-    ({ rootPath: root, filter }) => {
-      const store = openStore(root)
-      let entries = store.readAudit()
-      if (filter?.action) entries = entries.filter((e) => e.action.startsWith(filter.action!))
-      if (filter?.from) entries = entries.filter((e) => e.at >= filter.from!)
-      if (filter?.to) entries = entries.filter((e) => e.at <= filter.to!)
-      if (filter?.localNo) {
-        const ep = store.findEpisode(filter.localNo)
-        entries = entries.filter((e) => (ep ? e.episodeId === ep.id : false))
-      }
-      entries = entries.slice().reverse()
-      if (filter?.limit) entries = entries.slice(0, filter.limit)
-      return entries
-    }
-  )
-
-  handle(
-    'audit:export',
-    z.object({ rootPath: z.string().min(1), target: z.string().min(1) }),
-    ({ rootPath: root, target }) => {
-      const store = openStore(root)
-      const entries = store.readAudit()
-      const csv = [
-        'time,actor,action,episode,detail',
-        ...entries.map((e) =>
-          [
-            e.at,
-            e.actor,
-            e.action,
-            e.episodeId ?? '',
-            JSON.stringify(e.detail ?? {})
-          ]
-            .map((v) => `"${String(v).replace(/"/g, '""')}"`)
-            .join(',')
-        )
-      ].join('\r\n')
-      fs.mkdirSync(path.dirname(target), { recursive: true })
-      fs.writeFileSync(target, `${csv}\r\n`, 'utf8')
-      return { path: target, count: entries.length }
-    }
-  )
-
-  void appendAuditEntries
-  void nowIso
 }

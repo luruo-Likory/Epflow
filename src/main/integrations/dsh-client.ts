@@ -129,6 +129,12 @@ async function callCli(prompt: string, settings: DshSettings): Promise<string> {
   const tool = resolveTool('dsh')
   const command = tool.exists ? tool.path : settings.command
   if (!command) throw new DshUnavailableError('未配置 dsh 命令行')
+  if (/deepseek[ _-]?harness\.exe$/i.test(command)) {
+    throw new DshUnavailableError(
+      '当前「dsh 路径」指向的是 DSH 桌面程序，它不接受命令行参数',
+      '请改用「粘贴 JSON」模式（推荐），或在「AI 审阅」里配置 HTTP 接口 / 真正的 dsh CLI'
+    )
+  }
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'epflow-dsh-'))
   const promptFile = path.join(tmpDir, 'prompt.md')

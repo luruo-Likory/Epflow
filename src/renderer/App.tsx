@@ -7,7 +7,6 @@ import Wizard from './pages/Wizard'
 import ProjectHome from './pages/ProjectHome'
 import Workbench from './pages/Workbench'
 import SettingsPage from './pages/Settings'
-import AuditPage from './pages/Audit'
 import PublishPage from './pages/Publish'
 
 export type Route =
@@ -16,13 +15,11 @@ export type Route =
   | { name: 'project'; rootPath: string }
   | { name: 'workbench'; rootPath: string; localNo: string }
   | { name: 'settings' }
-  | { name: 'audit'; rootPath?: string }
   | { name: 'publish'; rootPath?: string }
 
 const NAV: Array<{ key: Route['name']; label: string; icon: string }> = [
   { key: 'projects', label: '项目', icon: '▤' },
   { key: 'settings', label: '设置', icon: '⚙' },
-  { key: 'audit', label: '审计日志', icon: '☰' },
   { key: 'publish', label: '发布（v2）', icon: '⇪' }
 ]
 
@@ -84,7 +81,6 @@ function ShellInner(): React.ReactElement {
 
   const breadcrumb = useMemo(() => {
     if (route.name === 'settings') return '设置'
-    if (route.name === 'audit') return '审计日志'
     if (route.name === 'publish') return '发布（v2）'
     if (route.name === 'wizard') return '新建项目'
     if (!snapshot) return '项目'
@@ -123,7 +119,6 @@ function ShellInner(): React.ReactElement {
               onClick={() => {
                 if (item.key === 'projects') setRoute({ name: 'projects' })
                 else if (item.key === 'settings') setRoute({ name: 'settings' })
-                else if (item.key === 'audit') setRoute({ name: 'audit', rootPath: snapshot?.project.rootPath })
                 else setRoute({ name: 'publish', rootPath: snapshot?.project.rootPath })
               }}
             >
@@ -174,11 +169,10 @@ function ShellInner(): React.ReactElement {
               />
             )}
             {route.name === 'settings' && <SettingsPage onBack={() => setRoute({ name: 'projects' })} />}
-            {route.name === 'audit' && <AuditPage rootPath={route.rootPath} />}
             {route.name === 'publish' && <PublishPage />}
           </div>
           <footer className="statusbar">
-            <span>EpFlow 1.0.0</span>
+            <span>EpFlow v{version || '1.0.1'}</span>
             {snapshot && (
               <>
                 <span>·</span>

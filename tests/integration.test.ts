@@ -6,7 +6,7 @@ import { defaultSettings } from '@shared/constants'
 import type { AppSettings } from '@shared/types'
 import { createProject, previewProject } from '@main/services/project-service'
 import { importSubtitle } from '@main/services/subtitle-service'
-import { submitReviewJson, setIssueStatus, buildPromptForEpisode } from '@main/services/review-service'
+import { submitReviewJson, setIssueStatus, buildPromptForEpisode, forcePassReview } from '@main/services/review-service'
 import { passHumanReview } from '@main/services/human-service'
 import { generateChapterDraft, lockChapters, readChapters } from '@main/services/chapter-service'
 import { checkGate } from '@main/services/gate-service'
@@ -286,5 +286,110 @@ describe('存量工程扫描', () => {
     expect(rows[0]?.episodeDirs).toEqual(['01', '02'])
     expect(rows[0]?.guessedReleaseBase).toBe(13)
     expect(rows[0]?.hasState).toBe(false)
+  })
+})
+
+describe('审阅视频选择', () => {
+  it('可为本集设置/清除审阅视频，并拒绝非视频文件', async () => {
+    const { setReviewVideo } = await import('@main/services/project-service')
+    const root = path.join(MATERIAL, 'BEASTARS S03')
+    const video = path.join(TMP, 'sample-video.mkv')
+    fs.writeFileSync(video, 'not a real video', 'utf8')
+
+    const set = setReviewVideo(root, '01', video, 'tester')
+    expect(set.reviewVideo?.path).toBe(video)
+    expect(set.reviewVideo?.source).toBe('manual')
+
+    const cleared = setReviewVideo(root, '01', null, 'tester')
+    expect(cleared.reviewVideo).toBeNull()
+
+    const bad = path.join(TMP, 'notes.txt')
+    fs.writeFileSync(bad, 'x', 'utf8')
+    expect(() => setReviewVideo(root, '01', bad, 'tester')).toThrow(/不支持的视频格式/)
+    expect(() => setReviewVideo(root, '01', path.join(TMP, 'missing.mkv'), 'tester')).toThrow(/不存在/)
+
+    const audit = openStore(root).readAudit().map((a) => a.action)
+    expect(audit).toContain('episode.video')
+  })
+})
+
+describe('问题处理后的 AI 状态流转', () => {
+  const FLOW_ASS = `[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,第一句
+Dialogue: 0,0:00:05.00,0:00:07.00,Default,,0,0,0,,第二句
+Dialogue: 0,0:00:09.00,0:00:11.00,Default,,0,0,0,,第三句
+`
+
+  it('全部修复后自动进入待人工审阅；重新打开问题会回退；强制通过不再报非法迁移', async () => {
+    const material = path.join(TMP, 'flow-media')
+    fs.mkdirSync(material, { recursive: true })
+    const flowSettings: AppSettings = { ...defaultSettings(), operator: 'tester', allowForcePass: true }
+    const snap = createProject(
+      {
+        animeName: 'Flow Repro',
+        materialRoot: material,
+        releaseNameTemplate: '[测试组] 流程验证 [{release}]',
+        releaseEpisodeBase: 1,
+        releaseEpisodeWidth: 2,
+        episodeCount: 1,
+        localStart: 1,
+        workNameTemplate: '{anime} - {ep}',
+        subDirName: '[翻译用]',
+        outputMode: 'episode-output'
+      },
+      { conflict: 'abort', operator: 'tester', settings: flowSettings }
+    )
+    const root = snap.project.rootPath
+    const assPath = path.join(TMP, 'flow.ass')
+    fs.writeFileSync(assPath, FLOW_ASS, 'utf8')
+    await importSubtitle(root, '01', assPath, flowSettings)
+
+    const aiJson = JSON.stringify({
+      schema_version: '1.0',
+      verdict: 'fail',
+      summary: '存在重要问题',
+      issues: [
+        {
+          severity: 'major',
+          category: 'typo',
+          line: 1,
+          original: '第一句',
+          suggestion: '修改错别字',
+          reason: '错别字',
+          confidence: 0.9
+        }
+      ]
+    })
+    const outcome = await submitReviewJson(root, '01', aiJson, flowSettings, 'tester')
+    expect(outcome.episode.state).toBe('AI_REJECTED')
+
+    const major = outcome.issues.find((i) => i.severity === 'major')!
+    setIssueStatus(root, major.id, 'fixed', '', 'tester')
+    let ep = openStore(root).getEpisode('01')
+    expect(ep.state).toBe('AI_PASSED')
+    expect(ep.aiVerdict).toBe('pass')
+
+    const gate = await checkGate(root, '01', 'open-human-review', flowSettings)
+    expect(gate.ok).toBe(true)
+
+    // 重新打开问题 → 回退
+    setIssueStatus(root, major.id, 'open', '', 'tester')
+    ep = openStore(root).getEpisode('01')
+    expect(ep.state).toBe('AI_REJECTED')
+
+    // 强制通过（允许豁免）→ 合法迁移
+    const forced = forcePassReview(root, '01', '测试豁免：已知问题可接受', flowSettings, 'tester')
+    expect(forced.state).toBe('AI_PASSED')
+    expect(forced.aiVerdict).toBe('pass')
   })
 })

@@ -6,7 +6,7 @@ import {
   findReleaseCandidates,
   type ReleaseCandidate
 } from '@shared/release-name'
-import { validateAnimeName } from '@shared/filename'
+import { validateAnimeName, validateSubDirName } from '@shared/filename'
 import { invoke, errorText } from '../lib/api'
 import {
   Badge,
@@ -96,7 +96,7 @@ export default function Wizard(props: {
     releaseBase: '1',
     releaseWidth: '2',
     workNameTemplate: '{anime} - {ep}',
-    subDirName: '[翻译用]',
+    subDirName: '',
     outputMode: 'episode-output'
   })
   const [selectedSpan, setSelectedSpan] = useState('')
@@ -130,7 +130,7 @@ export default function Wizard(props: {
         setForm((prev) => ({
           ...prev,
           materialRoot: prev.materialRoot || settings.materialRoot,
-          subDirName: settings.subDirName || prev.subDirName
+          subDirName: settings.subDirName ?? prev.subDirName
         }))
       })
       .catch(() => undefined)
@@ -197,7 +197,7 @@ export default function Wizard(props: {
         ? '补零宽度需为 1–4'
         : null
     const workError = form.workNameTemplate.trim() ? null : '工作名模板不能为空'
-    const subError = form.subDirName.trim() ? null : '翻译用目录名不能为空'
+    const subError = validateSubDirName(form.subDirName)
     const messages = [
       animeError,
       materialError,
@@ -636,10 +636,11 @@ export default function Wizard(props: {
               <Field
                 label="翻译用目录名"
                 error={validation.subError}
-                hint="默认 [翻译用]，与存量工程「翻译用」兼容"
+                hint="留空 = 不使用子目录，字幕/章节草稿直接放在集目录（01/、02/…）下，与 json/vpy 同级；填写如 [翻译用] 则额外建一层子目录。"
               >
                 <TextInput
                   value={form.subDirName}
+                  placeholder="留空（推荐）"
                   onChange={(event) => update('subDirName', event.target.value)}
                 />
               </Field>

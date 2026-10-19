@@ -138,10 +138,15 @@ export function analyzeBundle(bundle: TemplateBundle): TemplateInfo {
   const samplePath = info.vpyInput ?? info.inputFiles[0] ?? info.absolutePaths[0] ?? null
   if (samplePath) {
     const normalized = samplePath.replace(/\//g, '\\')
-    const epDir = path.dirname(normalized)
-    info.oldEpDir = epDir
-    info.oldLocal = path.basename(epDir)
-    info.oldAnime = path.basename(path.dirname(epDir))
+    const isAbsolute = /^[A-Za-z]:[\\/]/.test(normalized)
+    // 相对路径（例如 vpy 里只写了文件名）不能拿来推导「旧集目录 / 旧番名」，
+    // 否则 path.dirname 会得到 "."，替换时会把整份脚本里的所有点变成路径。
+    if (isAbsolute) {
+      const epDir = path.dirname(normalized)
+      info.oldEpDir = epDir
+      info.oldLocal = path.basename(epDir)
+      info.oldAnime = path.basename(path.dirname(epDir))
+    }
     const stem = path.basename(normalized, path.extname(normalized))
     info.oldWork = stem
     const rel = /(?:^|[.\s_-])(?:S\d{1,2})?E(?:P)?(\d{1,3})$/i.exec(stem)
@@ -183,6 +188,20 @@ function countOccurrences(text: string, needle: string): number {
   return count
 }
 
+const ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/
+
+/**
+ * 替换源必须足够具体：至少 3 个字符、且包含字母或中文。
+ * 否则 "."、"01"、"-" 这类短串会把整份模板里的标点/数字全部替换掉。
+ */
+export function isSafeSubstitutionSource(value: string | null | undefined): value is string {
+  if (!value) return false
+  const text = value.trim()
+  if (text.length < 3) return false
+  if (text === '.' || text === '..') return false
+  return /[A-Za-z\u4e00-\u9fa5]/.test(text)
+}
+
 /** 生成候选替换表（L2），并按出现次数排序 */
 export function buildSubstitutions(bundle: TemplateBundle, info: TemplateInfo): Substitution[] {
   const all = `${bundle.jsonText ?? ''}\n${bundle.vpyText ?? ''}`
@@ -194,8 +213,11 @@ export function buildSubstitutions(bundle: TemplateBundle, info: TemplateInfo): 
     to: string,
     scope: Substitution['scope'] = 'both'
   ) => {
-    if (!from) return
-    const count = countOccurrences(all, from)
+    if (!isSafeSubstitutionSource(from)) return
+    // 原始文本里 JSON 的路径是双反斜杠（D:\\media\\...），vpy 里可能是正斜杠，
+    // 因此计数要同时考虑转义形式，否则「绝对路径」替换会被误判为不存在。
+    const variants = [from, from.replace(/\\/g, '\\\\'), from.replace(/\\/g, '/')]
+    const count = Math.max(...variants.map((v) => countOccurrences(all, v)))
     if (count === 0) return
     if (out.some((s) => s.from === from)) return
     out.push({ id, kind, from, to, count, enabled: true, scope })
@@ -203,15 +225,21 @@ export function buildSubstitutions(bundle: TemplateBundle, info: TemplateInfo): 
 
   for (const file of info.inputFiles) {
     const stem = path.basename(file, path.extname(file))
-    add(`input-${out.length}`, 'path', file, '{ep_dir}\\{work}.mkv', 'both')
+    if (ABSOLUTE_PATH.test(file)) add(`input-${out.length}`, 'path', file, '{ep_dir}\\{work}.mkv', 'both')
     add(`input-stem-${out.length}`, 'work', stem, '{work}')
   }
-  add('vpy-input', 'path', info.vpyInput, '{ep_dir}\\{work}.mkv')
-  add('vpy-subtitle', 'subtitle', info.vpySubtitle, '{sub_dir}\\{work}.ass')
-  add('old-ep-dir', 'path', info.oldEpDir, '{ep_dir}')
+  if (isSafeSubstitutionSource(info.vpyInput)) {
+    // 相对路径（只写文件名）也映射到规范路径；绝对路径同样映射到当前集目录
+    add('vpy-input', 'path', info.vpyInput, '{ep_dir}\\{work}.mkv')
+  }
+  if (isSafeSubstitutionSource(info.vpySubtitle)) {
+    add('vpy-subtitle', 'subtitle', info.vpySubtitle, '{sub_dir}\\{work}.ass')
+  }
+  if (isSafeSubstitutionSource(info.oldEpDir)) add('old-ep-dir', 'path', info.oldEpDir, '{ep_dir}')
   add('old-work', 'work', info.oldWork, '{work}')
-  add('old-anime', 'anime', info.oldAnime, '{anime}')
-  add('old-release', 'episode', info.oldRelease, '{release}', 'json')
+  if (isSafeSubstitutionSource(info.oldAnime)) add('old-anime', 'anime', info.oldAnime, '{anime}')
+  // 不再按「裸集数」替换：集数通常已包含在工作名/文件名里，
+  // 单独替换 "01" 会误伤版本号、参数小数等无关内容。
 
   return out.sort((a, b) => b.from.length - a.from.length)
 }
@@ -272,6 +300,7 @@ function applySubstitutions(text: string, substitutions: Substitution[], scope: 
   let out = text
   const active = substitutions
     .filter((s) => s.enabled && (s.scope === 'both' || s.scope === scope))
+    .filter((s) => isSafeSubstitutionSource(s.from))
     .sort((a, b) => b.from.length - a.from.length)
   for (const sub of active) {
     if (!sub.from) continue
@@ -285,6 +314,19 @@ function normalizeSlashesInQuotes(text: string, style: 'posix' | 'win'): string 
     const normalized = style === 'posix' ? inner.replace(/\\/g, '/') : inner.replace(/\//g, '\\')
     const quote = all.startsWith('R') ? 'R"' : '"'
     return `${quote}${normalized}"`
+  })
+}
+
+/**
+ * 普通字符串里的 Windows 绝对路径必须改成 raw string：
+ * "D:\...\01\x.ass" 中的 \0 会被 Python 当成八进制转义，\t、\n 同理，
+ * 导致 TextSubMod / LWLibavSource 打不开文件。R"..." 里反斜杠保持字面量。
+ */
+export function quoteWindowsPathsAsRaw(text: string): string {
+  return text.replace(/(?<!R)"([A-Za-z]:[\\/][^"\n]*)"/g, (_all, inner: string) => {
+    // 模板里若已经写成 \\ 转义形式，先还原成单反斜杠，再交给 raw string
+    const normalized = inner.replace(/\\\\/g, '\\')
+    return `R"${normalized}"`
   })
 }
 
@@ -339,7 +381,8 @@ export function renderVpyFor(
   const usesPosix = /R"[^"]*\/[^"]*"/.test(bundle.vpyText)
   const substituted = applySubstitutions(bundle.vpyText, substitutions, 'vpy')
   const expanded = expandVariables(substituted, vars).text
-  const finalText = usesPosix ? normalizeSlashesInQuotes(expanded, 'posix') : expanded
+  const slashed = usesPosix ? normalizeSlashesInQuotes(expanded, 'posix') : expanded
+  const finalText = quoteWindowsPathsAsRaw(slashed)
   const leftover = findLeftovers(finalText, bundle.info)
   if (leftover.length > 0) warnings.push(`疑似残留旧值：${leftover.slice(0, 3).join('、')}`)
   return { path: '', text: finalText, warnings }

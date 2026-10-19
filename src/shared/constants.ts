@@ -4,10 +4,15 @@ export const APP_NAME = 'EpFlow'
 export const SETTINGS_SCHEMA_VERSION = 1
 export const STATE_SCHEMA_VERSION = 1
 
-export const DEFAULT_MATERIAL_ROOT = 'C:\\EpFlow\\materials'
-export const DEFAULT_SUB_DIR = '[翻译用]'
+export const DEFAULT_MATERIAL_ROOT = 'D:\\media\\origin material'
+/**
+ * 「翻译用」子目录名的默认值。
+ * 空字符串表示不使用子目录：字幕、章节草稿等文件直接放在集目录（01/、02/…）下，
+ * 与 json/vpy/output 同级，减少一层目录嵌套。
+ */
+export const DEFAULT_SUB_DIR = ''
 export const DEFAULT_WORK_NAME_TEMPLATE = '{anime} - {ep}'
-export const DEFAULT_PROMPT_VERSION = 'review-v1'
+export const DEFAULT_PROMPT_VERSION = 'review-v2'
 export const OUTPUT_DIR_NAME = 'output'
 export const STATE_DIR_NAME = '.epflow'
 
@@ -51,6 +56,11 @@ export function defaultSettings(): AppSettings {
       httpUrl: 'https://api.deepseek.com/chat/completions',
       apiKeyEnv: 'DEEPSEEK_API_KEY',
       allowSubtitleUpload: true
+    },
+    review: {
+      effectStyleKeywords: ['特效', 'Effect', 'Title', 'Staff', 'Logo', 'OP', 'ED', 'Kara', 'Comment'],
+      screenStyleKeywords: ['ScreenText', 'Screen', 'Sign', 'Caption', '屏字', '屏幕字', '字幕', 'Note'],
+      excludeComments: true
     },
     chapter: {
       gapThresholdMs: 2000,

@@ -7,3 +7,4 @@ out/
 .DS_Store
 Thumbs.db
 tests/.tmp/
+docs/00-上下文摘要.md

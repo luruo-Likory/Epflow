@@ -12,6 +12,18 @@ let currentDay = ''
 let stream: fs.WriteStream | null = null
 let currentLevel: LogLevel = 'info'
 const listeners = new Set<(line: LogLine) => void>()
+let consoleBroken = false
+
+/** 控制台可能被关闭（管道断开 → EPIPE），失败一次后就不要再写，避免异常循环 */
+function safeConsole(text: string): void {
+  if (consoleBroken) return
+  try {
+    // eslint-disable-next-line no-console
+    console.log(text)
+  } catch {
+    consoleBroken = true
+  }
+}
 
 export interface LogLine {
   at: string
@@ -106,8 +118,7 @@ export function log(level: LogLevel, scope: string, message: string, extra?: unk
     (extra === undefined ? '' : ` ${safeStringify(line.extra)}`)
 
   if (!app.isPackaged) {
-    // eslint-disable-next-line no-console
-    console.log(text)
+    safeConsole(text)
   }
   try {
     rotateIfNeeded(dayKey(new Date()))

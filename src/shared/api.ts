@@ -1,6 +1,5 @@
 import type {
   AppSettings,
-  AuditEntry,
   Chapter,
   EpisodeRecord,
   GateAction,
@@ -261,12 +260,12 @@ export interface ProgressEventDto {
   candidates?: Array<{ path: string; size: number }>
 }
 
-export interface AuditFilterDto {
-  action?: string
-  localNo?: string
-  from?: string
-  to?: string
-  limit?: number
+/** 目录布局迁移（翻译用子目录 → 集目录）结果 */
+export interface ProjectLayoutMigrationDto {
+  moved: Array<{ from: string; to: string }>
+  skipped: string[]
+  removedDirs: string[]
+  removedBackups: string[]
 }
 
 /* ------------------------------------------------------------------ */
@@ -321,9 +320,14 @@ export interface ApiTopicMap {
     result: ProjectSnapshot
   }
   'project:recover': { payload: { rootPath: string }; result: { recovered: string[]; verified: string[] } }
+  'project:migrate-layout': { payload: { rootPath: string }; result: ProjectLayoutMigrationDto }
 
   'episode:detail': { payload: { rootPath: string; localNo: string }; result: EpisodeDetailDto }
   'episode:note': { payload: { rootPath: string; localNo: string; note: string }; result: EpisodeRecord }
+  'episode:set-video': {
+    payload: { rootPath: string; localNo: string; path: string | null }
+    result: EpisodeRecord
+  }
   'episode:done': { payload: { rootPath: string; localNo: string }; result: EpisodeRecord }
 
   'template:analyze': { payload: { rootPath: string }; result: TemplateAnalysisDto }
@@ -426,8 +430,33 @@ export interface ApiTopicMap {
   }
   'naming:run': { payload: { rootPath: string; localNo: string }; result: EpisodeRecord }
 
-  'audit:list': { payload: { rootPath: string; filter?: AuditFilterDto }; result: AuditEntry[] }
-  'audit:export': { payload: { rootPath: string; target: string }; result: { path: string; count: number } }
+  'player:start': {
+    payload: { rootPath: string; localNo: string; rect: PlayerRectDto }
+    result: { ok: boolean; reason?: string; engine: 'mpv' | 'builtin' }
+  }
+  'player:bounds': { payload: { rect: PlayerRectDto }; result: void }
+  'player:command': {
+    payload: { command: Array<string | number | boolean> }
+    result: { ok: boolean; error?: string }
+  }
+  'player:stop': { payload: undefined; result: void }
+  'player:status': { payload: undefined; result: PlayerStatusDto }
+}
+
+export interface PlayerRectDto {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface PlayerStatusDto {
+  running: boolean
+  engine: 'mpv' | 'builtin'
+  timePos: number
+  duration: number
+  paused: boolean
+  reason?: string
 }
 
 export type TopicName = keyof ApiTopicMap

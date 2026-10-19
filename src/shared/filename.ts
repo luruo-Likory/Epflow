@@ -78,3 +78,17 @@ export function validateReleaseTemplate(template: string): string | null {
   if (!template.trim()) return '发布名不能为空'
   return null
 }
+
+/**
+ * 「翻译用」子目录名校验；空字符串合法，表示不使用子目录
+ * （字幕、章节草稿等直接放在集目录下）。返回 null 表示通过。
+ */
+export function validateSubDirName(name: string): string | null {
+  const value = name.trim()
+  if (!value) return null
+  if (value === '.' || value === '..') return '子目录名不能是「.」或「..」'
+  if (ILLEGAL_CHAR.test(value)) return '子目录名不能包含 < > : " / \\ | ? * 等字符'
+  if (/[. ]$/.test(value)) return '子目录名不能以点或空格结尾'
+  if (value.length > 80) return '子目录名不能超过 80 个字符'
+  return null
+}

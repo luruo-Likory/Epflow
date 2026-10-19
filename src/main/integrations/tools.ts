@@ -20,24 +20,40 @@ export interface ToolProbe {
 }
 
 const CANDIDATES: Record<ToolKey, string[]> = {
-  okegui: ['C:\\Program Files\\OKEGui\\OKEGui.exe'],
-  ffmpeg: ['C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe'],
-  ffprobe: ['C:\\Program Files\\ffmpeg\\bin\\ffprobe.exe'],
+  okegui: [
+    'D:\\media\\OKEGui\\OKEGui.exe',
+    'D:\\media\\local64\\OKEGui\\OKEGui.exe',
+    'C:\\Program Files\\OKEGui\\OKEGui.exe'
+  ],
+  ffmpeg: [
+    'D:\\media\\local64\\bin-video\\ffmpeg.exe',
+    'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe'
+  ],
+  ffprobe: [
+    'D:\\media\\local64\\bin-video\\ffprobe.exe',
+    'C:\\Program Files\\ffmpeg\\bin\\ffprobe.exe'
+  ],
   mkvpropedit: [
     'C:\\Program Files\\MKVToolNix\\mkvpropedit.exe',
-    'C:\\Program Files (x86)\\MKVToolNix\\mkvpropedit.exe'
+    'C:\\Program Files (x86)\\MKVToolNix\\mkvpropedit.exe',
+    'D:\\Program Files\\MKVToolNix\\mkvpropedit.exe',
+    'D:\\Program Files (x86)\\MKVToolNix\\mkvpropedit.exe',
+    'D:\\media\\local64\\bin-video\\mkvpropedit.exe'
   ],
   mkvmerge: [
     'C:\\Program Files\\MKVToolNix\\mkvmerge.exe',
-    'C:\\Program Files (x86)\\MKVToolNix\\mkvmerge.exe'
+    'C:\\Program Files (x86)\\MKVToolNix\\mkvmerge.exe',
+    'D:\\Program Files\\MKVToolNix\\mkvmerge.exe',
+    'D:\\Program Files (x86)\\MKVToolNix\\mkvmerge.exe',
+    'D:\\media\\local64\\bin-video\\mkvmerge.exe'
   ],
   aegisub: [
+    'D:\\media\\Aegisub\\aegisub.exe',
     'C:\\Program Files\\Aegisub\\aegisub64.exe',
     'C:\\Program Files (x86)\\Aegisub\\aegisub32.exe'
   ],
-  // 非标准安装位置由用户在「设置 → 外部工具」中手动指定，或加入 PATH
-  mpv: [],
-  python: [],
+  mpv: ['D:\\media\\local64\\bin-video\\mpv.exe'],
+  python: ['D:\\media\\OKEGui\\tools\\vapoursynth\\python.exe'],
   dsh: []
 }
 

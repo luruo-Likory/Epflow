@@ -310,6 +310,7 @@ function migrate(state: ProjectStateFile): ProjectStateFile {
   for (const ep of state.episodes) {
     ep.staleReasons = ep.staleReasons ?? []
     ep.note = ep.note ?? ''
+    ep.reviewVideo = ep.reviewVideo ?? null
   }
   return state
 }

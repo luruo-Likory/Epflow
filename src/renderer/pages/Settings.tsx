@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ToolProbeDto } from '@shared/api'
 import type { AppSettings, ToolPaths } from '@shared/types'
+import { validateSubDirName } from '@shared/filename'
 import { errorText, invoke } from '../lib/api'
 import {
   Badge,
@@ -72,6 +73,7 @@ const SECTIONS: Array<{ id: string; label: string }> = [
   { id: 'settings-general', label: '通用' },
   { id: 'settings-tools', label: '外部工具' },
   { id: 'settings-dsh', label: 'AI 审阅（DSH）' },
+  { id: 'settings-review', label: '审阅范围' },
   { id: 'settings-chapter', label: '章节参数' },
   { id: 'settings-naming', label: '命名与输出' },
   { id: 'settings-mp4', label: 'MP4' },
@@ -92,11 +94,23 @@ function scrollToSection(id: string): void {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
+function splitKeywords(text: string): string[] {
+  return text
+    .split(/[,，、;；\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
 function cloneSettings(source: AppSettings): AppSettings {
   return {
     ...source,
     tools: { ...source.tools },
     dsh: { ...source.dsh },
+    review: {
+      effectStyleKeywords: [...source.review.effectStyleKeywords],
+      screenStyleKeywords: [...source.review.screenStyleKeywords],
+      excludeComments: source.review.excludeComments
+    },
     chapter: { ...source.chapter },
     naming: { ...source.naming },
     mp4: { ...source.mp4 },
@@ -119,6 +133,7 @@ function diffPatch(base: AppSettings, next: AppSettings): Partial<AppSettings> {
   if (base.theme !== next.theme) patch.theme = next.theme
   if (JSON.stringify(base.tools) !== JSON.stringify(next.tools)) patch.tools = next.tools
   if (JSON.stringify(base.dsh) !== JSON.stringify(next.dsh)) patch.dsh = next.dsh
+  if (JSON.stringify(base.review) !== JSON.stringify(next.review)) patch.review = next.review
   if (JSON.stringify(base.chapter) !== JSON.stringify(next.chapter)) patch.chapter = next.chapter
   if (JSON.stringify(base.naming) !== JSON.stringify(next.naming)) patch.naming = next.naming
   if (JSON.stringify(base.mp4) !== JSON.stringify(next.mp4)) patch.mp4 = next.mp4
@@ -448,7 +463,8 @@ export default function SettingsPage(props: { onBack: () => void }): React.React
 
     if (!draft.operator.trim()) result.operator = '请填写操作者名称，将写入审计日志'
     if (!draft.materialRoot.trim()) result.materialRoot = '请选择素材根目录'
-    if (!draft.subDirName.trim()) result.subDirName = '请填写翻译用子目录名'
+    const subDirError = validateSubDirName(draft.subDirName)
+    if (subDirError) result.subDirName = subDirError
 
     const dsh = draft.dsh
     if (!dsh.model.trim()) result.dshModel = '请填写模型名称'
@@ -745,10 +761,14 @@ export default function SettingsPage(props: { onBack: () => void }): React.React
                 </div>
               </Field>
 
-              <Field label="翻译用子目录名" hint="集目录下存放字幕与章节草稿的子目录" error={errors.subDirName}>
+              <Field
+                label="翻译用子目录名"
+                hint="新建项目的默认值。留空 = 字幕与章节草稿直接放在集目录（强烈推荐）；填写如 [翻译用] 则额外建一层子目录。"
+                error={errors.subDirName}
+              >
                 <TextInput
                   value={draft.subDirName}
-                  placeholder="[翻译用]"
+                  placeholder="留空（推荐）"
                   onChange={(event) =>
                     mutate((next) => {
                       next.subDirName = event.target.value
@@ -1020,6 +1040,57 @@ export default function SettingsPage(props: { onBack: () => void }): React.React
                 </Grid>
               )}
             </div>
+          </Card>
+        </div>
+
+        {/* 3b. 审阅范围 */}
+        <div id="settings-review" style={{ scrollMarginTop: 8 }}>
+          <Card title="审阅范围">
+            <div style={{ fontSize: 12.5, color: 'var(--color-text-muted)', marginBottom: 10, lineHeight: 1.7 }}>
+              AI 只审三类问题：<b>错别字</b>、<b>语言是否通顺</b>、<b>同一时间两句是否上下排列</b>。
+              特效行（绘图、字体特效、卡拉OK、动画、定位程序等）不会被审阅，也不会出现在发送给 AI 的表格里。
+            </div>
+            <Grid>
+              <Field
+                label="特效样式关键字"
+                hint="样式名包含任一关键字即视为特效行，不审阅；多个用逗号分隔"
+              >
+                <TextInput
+                  value={draft.review.effectStyleKeywords.join(', ')}
+                  placeholder="特效, Effect, Title, OP, ED, Kara"
+                  onChange={(event) =>
+                    mutate((next) => {
+                      next.review.effectStyleKeywords = splitKeywords(event.target.value)
+                    })
+                  }
+                />
+              </Field>
+              <Field
+                label="屏幕字样式关键字"
+                hint="命中这些样式的行按「屏幕字」处理（仍然审阅）；多个用逗号分隔"
+              >
+                <TextInput
+                  value={draft.review.screenStyleKeywords.join(', ')}
+                  placeholder="ScreenText, Sign, Caption, 屏字"
+                  onChange={(event) =>
+                    mutate((next) => {
+                      next.review.screenStyleKeywords = splitKeywords(event.target.value)
+                    })
+                  }
+                />
+              </Field>
+            </Grid>
+            <Field label="注释行" hint="Comment 行默认不审阅（多数是标注/特效说明）">
+              <Checkbox
+                checked={draft.review.excludeComments}
+                onChange={(checked) =>
+                  mutate((next) => {
+                    next.review.excludeComments = checked
+                  })
+                }
+                label={<span>忽略 Comment 行</span>}
+              />
+            </Field>
           </Card>
         </div>
 

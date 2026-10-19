@@ -16,6 +16,8 @@ export default function ProjectHome(props: {
   const toast = useToast()
   const [showTemplates, setShowTemplates] = useState(false)
   const [showMapping, setShowMapping] = useState(false)
+  const [showMigrate, setShowMigrate] = useState(false)
+  const [migrating, setMigrating] = useState(false)
   const [releaseEdits, setReleaseEdits] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
 
@@ -51,6 +53,23 @@ export default function ProjectHome(props: {
     }
   }
 
+  const migrateLayout = async () => {
+    setMigrating(true)
+    try {
+      const result = await invoke('project:migrate-layout', { rootPath: project.rootPath })
+      const parts = [`迁移 ${result.moved.length} 个文件`]
+      if (result.removedDirs.length > 0) parts.push(`清理 ${result.removedDirs.length} 个空目录`)
+      if (result.skipped.length > 0) parts.push(`跳过 ${result.skipped.length} 项（目标已存在）`)
+      toast.success(`已改为集目录布局：${parts.join('，')}`)
+      setShowMigrate(false)
+      onReload()
+    } catch (err) {
+      toast.error(errorText(err))
+    } finally {
+      setMigrating(false)
+    }
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <Card
@@ -76,6 +95,11 @@ export default function ProjectHome(props: {
             <Button size="sm" onClick={() => setShowMapping(true)}>
               集号对照表
             </Button>
+            {project.subDirName && (
+              <Button size="sm" onClick={() => setShowMigrate(true)}>
+                改为集目录布局
+              </Button>
+            )}
             <Button size="sm" kind="primary" onClick={() => setShowTemplates(true)}>
               模板与实例化
             </Button>
@@ -93,8 +117,10 @@ export default function ProjectHome(props: {
         <div className="row wrap" style={{ gap: 16, fontSize: 12.5 }}>
           <span className="muted">素材根目录</span>
           <span className="mono">{project.materialRoot}</span>
-          <span className="muted">翻译用</span>
-          <span className="mono">{project.subDirName}</span>
+          <span className="muted">字幕/章节目录</span>
+          <span className="mono">
+            {project.subDirName ? project.subDirName : '集目录（无子目录）'}
+          </span>
           <span className="muted">工作名</span>
           <span className="mono">{project.workNameTemplate}</span>
           <span className="spacer" />
@@ -233,6 +259,33 @@ export default function ProjectHome(props: {
         }
       >
         <TemplatePanel rootPath={project.rootPath} episodes={episodes} onChanged={onReload} />
+      </Modal>
+
+      <Modal
+        open={showMigrate}
+        title="改为集目录布局"
+        onClose={() => setShowMigrate(false)}
+        footer={
+          <>
+            <Button onClick={() => setShowMigrate(false)}>取消</Button>
+            <Button kind="primary" disabled={migrating} onClick={() => void migrateLayout()}>
+              {migrating ? '迁移中…' : '开始迁移'}
+            </Button>
+          </>
+        }
+      >
+        <div style={{ fontSize: 13, lineHeight: 1.75 }}>
+          <p style={{ marginTop: 0 }}>
+            当前字幕与章节草稿放在 <span className="mono">{project.subDirName}\集号\</span> 下。迁移后改为
+            <span className="mono"> 集号\</span>，与 <span className="mono">json / vpy / output</span> 同级。
+          </p>
+          <ul style={{ margin: '8px 0', paddingLeft: 18 }}>
+            <li>只移动 EpFlow 生成的字幕与章节草稿，不改文件内容；</li>
+            <li>迁移后请重新「模板与实例化」，让 vpy 里的字幕路径指向新位置；</li>
+            <li>目标位置已存在同名文件时会跳过，不会覆盖；</li>
+            <li>旧目录只删除空目录，任何仍含文件的目录都会保留。</li>
+          </ul>
+        </div>
       </Modal>
     </div>
   )

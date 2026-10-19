@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { EpisodeDetailDto, SubtitleViewDto } from '@shared/api'
+import type { EpisodeDetailDto, PlayerStatusDto, SubtitleEventDto, SubtitleViewDto } from '@shared/api'
 import type { IssueStatus, ReviewIssue } from '@shared/types'
 import { SEVERITY_META } from '@shared/state-machine'
 import { formatTimecode, formatClock } from '@shared/time'
@@ -16,6 +16,55 @@ const STATUS_META: Record<IssueStatus, { label: string; tone: string }> = {
   false_positive: { label: '误报', tone: 'gray' }
 }
 
+/** 内置播放器的 ASS 字幕叠加层：按当前播放时间渲染对白/屏幕字 */
+function SubtitleOverlay({ events, ms }: { events: SubtitleEventDto[]; ms: number }): React.ReactElement | null {
+  const active = events.filter(
+    (e) => !e.isComment && e.plain.trim().length > 0 && ms >= e.startMs && ms <= e.endMs
+  )
+  if (active.length === 0) return null
+
+  const isTop = (text: string): boolean => /\\an[789]/.test(text)
+  const line = (e: SubtitleEventDto): React.ReactElement => (
+    <div
+      key={e.index}
+      style={{
+        whiteSpace: 'pre-line',
+        fontSize: 'clamp(12px, 4.4cqh, 40px)',
+        lineHeight: 1.25,
+        color: '#ffffff',
+        fontWeight: 600,
+        textAlign: 'center',
+        textShadow:
+          '0 0 3px #000, 1px 1px 2px #000, -1px 1px 2px #000, 1px -1px 2px #000, -1px -1px 2px #000'
+      }}
+    >
+      {e.plain}
+    </div>
+  )
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        pointerEvents: 'none',
+        containerType: 'size',
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'space-between',
+        padding: '6% 5% 9%'
+      }}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
+        {active.filter((e) => isTop(e.text)).map(line)}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'center' }}>
+        {active.filter((e) => !isTop(e.text)).map(line)}
+      </div>
+    </div>
+  )
+}
+
 export function ReviewPanel({
   rootPath,
   detail,
@@ -27,7 +76,8 @@ export function ReviewPanel({
 }): React.ReactElement {
   const toast = useToast()
   const [subtitle, setSubtitle] = useState<SubtitleViewDto | null>(null)
-  const [videoPath, setVideoPath] = useState<string | null>(null)
+  const [templateVideo, setTemplateVideo] = useState<string | null>(null)
+  const [videoError, setVideoError] = useState(false)
   const [view, setView] = useState<ViewKey>('all')
   const [severityFilter, setSeverityFilter] = useState<'all' | 'blocker' | 'major'>('all')
   const [statusFilter, setStatusFilter] = useState<'all' | IssueStatus>('all')
@@ -47,6 +97,13 @@ export function ReviewPanel({
   const [allowForce, setAllowForce] = useState(false)
   const [forceOpen, setForceOpen] = useState(false)
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const videoBoxRef = useRef<HTMLDivElement | null>(null)
+  const [engine, setEngine] = useState<'mpv' | 'builtin'>(() =>
+    localStorage.getItem('epflow.player') === 'mpv' ? 'mpv' : 'builtin'
+  )
+  const [mpvStatus, setMpvStatus] = useState<PlayerStatusDto | null>(null)
+  const [mpvError, setMpvError] = useState<string | null>(null)
+  const mpvWasRunning = useRef(false)
 
   const ep = detail.episode
   const issues = detail.issues
@@ -101,10 +158,141 @@ export function ReviewPanel({
     void invoke('template:analyze', { rootPath })
       .then((a) => {
         const file = a.info.inputFiles[0]
-        if (file) setVideoPath(file)
+        if (file) setTemplateVideo(file)
       })
       .catch(() => undefined)
   }, [rootPath])
+
+  const videoPath = ep.reviewVideo?.path ?? templateVideo
+  const videoName = videoPath ? videoPath.split(/[\\/]/).pop() ?? videoPath : null
+  const subtitlePath = subtitle?.info?.path ?? null
+
+  useEffect(() => {
+    setVideoError(false)
+  }, [videoPath])
+
+  const switchEngine = (next: 'mpv' | 'builtin') => {
+    setEngine(next)
+    localStorage.setItem('epflow.player', next)
+    if (next === 'builtin') setMpvStatus(null)
+  }
+
+  /** mpv 内嵌：把视频区域的屏幕矩形交给主进程，由子窗口承载 mpv 画面与 ASS 字幕 */
+  useEffect(() => {
+    if (engine !== 'mpv' || !videoPath || subtitle === null) {
+      setMpvStatus(null)
+      void invoke('player:stop').catch(() => undefined)
+      return
+    }
+    let disposed = false
+    let rectTimer: number | null = null
+    const sendBounds = () => {
+      const box = videoBoxRef.current
+      if (!box) return
+      const r = box.getBoundingClientRect()
+      void invoke('player:bounds', {
+        rect: { x: r.x, y: r.y, width: r.width, height: r.height }
+      }).catch(() => undefined)
+    }
+    const scheduleBounds = () => {
+      if (rectTimer !== null) return
+      rectTimer = window.setTimeout(() => {
+        rectTimer = null
+        sendBounds()
+      }, 100)
+    }
+    const start = async () => {
+      const box = videoBoxRef.current
+      if (!box) return
+      const r = box.getBoundingClientRect()
+      try {
+        const result = await invoke('player:start', {
+          rootPath,
+          localNo: ep.localNo,
+          rect: { x: r.x, y: r.y, width: r.width, height: r.height }
+        })
+        if (disposed) {
+          void invoke('player:stop').catch(() => undefined)
+          return
+        }
+        if (!result.ok) {
+          setMpvError(result.reason ?? 'mpv 启动失败')
+          switchEngine('builtin')
+          toast.warn(`${result.reason ?? 'mpv 启动失败'}，已切换为内置播放器`)
+        }
+      } catch (err) {
+        if (!disposed) {
+          toast.warn(`${errorText(err)}，已切换为内置播放器`)
+          switchEngine('builtin')
+        }
+      }
+    }
+    void start()
+    const observer = new ResizeObserver(scheduleBounds)
+    if (videoBoxRef.current) observer.observe(videoBoxRef.current)
+    window.addEventListener('resize', scheduleBounds)
+    window.addEventListener('scroll', scheduleBounds, true)
+    const off = subscribe('mpv:status', (payload) => {
+      const status = payload as PlayerStatusDto
+      setMpvStatus(status)
+      if (status.running) {
+        mpvWasRunning.current = true
+      } else if (mpvWasRunning.current) {
+        mpvWasRunning.current = false
+        setMpvError('mpv 已退出')
+        toast.warn('mpv 已退出，已切换为内置播放器')
+        switchEngine('builtin')
+      }
+    })
+    return () => {
+      disposed = true
+      if (rectTimer !== null) window.clearTimeout(rectTimer)
+      observer.disconnect()
+      window.removeEventListener('resize', scheduleBounds)
+      window.removeEventListener('scroll', scheduleBounds, true)
+      off()
+      void invoke('player:stop').catch(() => undefined)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine, videoPath, subtitlePath, rootPath, ep.localNo])
+
+  useEffect(() => {
+    if (engine !== 'mpv' || !mpvStatus?.running) return
+    const ms = mpvStatus.timePos * 1000
+    setCurrentMs(ms)
+    const active = (subtitle?.events ?? []).find((e) => e.index === selectedEvent)
+    if (loop && active && ms > active.endMs + 80) {
+      void invoke('player:command', {
+        command: ['seek', active.startMs / 1000, 'absolute']
+      }).catch(() => undefined)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine, mpvStatus, loop, selectedEvent, subtitle])
+
+  const chooseVideo = async () => {
+    try {
+      const files = await invoke('dialog:pick-files', {
+        title: '选择审阅用视频',
+        filters: [{ name: '视频文件', extensions: ['mkv', 'mp4', 'avi', 'mov', 'webm', 'ts', 'm2ts'] }]
+      })
+      if (files.length === 0 || !files[0]) return
+      await invoke('episode:set-video', { rootPath, localNo: ep.localNo, path: files[0] })
+      toast.success('已设置本集审阅视频')
+      onRefresh()
+    } catch (err) {
+      toast.error(errorText(err))
+    }
+  }
+
+  const clearVideo = async () => {
+    try {
+      await invoke('episode:set-video', { rootPath, localNo: ep.localNo, path: null })
+      toast.info('已恢复为模板源视频')
+      onRefresh()
+    } catch (err) {
+      toast.error(errorText(err))
+    }
+  }
 
   useEffect(() => {
     const onResize = () => setNarrow(window.innerWidth < 1280)
@@ -208,12 +396,19 @@ export function ReviewPanel({
 
   const durationMs = Math.max(
     subtitle?.events.reduce((max, e) => Math.max(max, e.endMs), 0) ?? 0,
+    mpvStatus?.duration ? mpvStatus.duration * 1000 : 0,
     1000
   )
 
   const seek = useCallback(
     (ms: number) => {
       setCurrentMs(ms)
+      if (engine === 'mpv') {
+        void invoke('player:command', {
+          command: ['seek', Math.max(0, ms / 1000), 'absolute']
+        }).catch(() => undefined)
+        return
+      }
       const video = videoRef.current
       if (video) {
         video.currentTime = Math.max(0, ms / 1000)
@@ -222,8 +417,22 @@ export function ReviewPanel({
         }
       }
     },
-    [loop, currentEvent]
+    [loop, currentEvent, engine]
   )
+
+  const togglePlay = useCallback(() => {
+    if (engine === 'mpv') {
+      void invoke('player:command', {
+        command: ['set_property', 'pause', !(mpvStatus?.paused ?? true)]
+      }).catch(() => undefined)
+      return
+    }
+    const video = videoRef.current
+    if (video) {
+      if (video.paused) void video.play()
+      else video.pause()
+    }
+  }, [engine, mpvStatus])
 
   const selectEvent = useCallback(
     (index: number) => {
@@ -259,10 +468,7 @@ export function ReviewPanel({
           break
         case ' ':
           e.preventDefault()
-          if (videoRef.current) {
-            if (videoRef.current.paused) void videoRef.current.play()
-            else videoRef.current.pause()
-          }
+          togglePlay()
           break
         case 'f':
         case 'F':
@@ -618,6 +824,7 @@ export function ReviewPanel({
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <div style={{ flex: '0 0 58%', minWidth: 0, display: 'flex', flexDirection: 'column', padding: 12, gap: 8 }}>
           <div
+            ref={videoBoxRef}
             style={{
               background: '#0b1220',
               borderRadius: 8,
@@ -628,18 +835,52 @@ export function ReviewPanel({
               overflow: 'hidden'
             }}
           >
-            {videoPath ? (
-              <video
-                ref={videoRef}
-                src={`file:///${videoPath.replace(/\\/g, '/')}`}
-                controls
-                style={{ width: '100%', height: '100%' }}
-                onTimeUpdate={(e) => setCurrentMs((e.target as HTMLVideoElement).currentTime * 1000)}
-              />
-            ) : (
-              <div className="muted" style={{ color: '#94a3b8', fontSize: 12.5 }}>
-                未关联视频（仍可按时间轴审阅字幕）
+            {engine === 'mpv' && videoPath ? (
+              <div style={{ color: '#64748b', fontSize: 12.5 }}>
+                {mpvError ? mpvError : mpvStatus?.running ? 'mpv 内嵌播放中（含 ASS 字幕）' : '正在启动 mpv…'}
               </div>
+            ) : videoPath && !videoError ? (
+              <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+                <video
+                  ref={videoRef}
+                  src={`file:///${videoPath.replace(/\\/g, '/')}`}
+                  controls
+                  style={{ width: '100%', height: '100%' }}
+                  onError={() => setVideoError(true)}
+                  onTimeUpdate={(e) => setCurrentMs((e.target as HTMLVideoElement).currentTime * 1000)}
+                />
+                <SubtitleOverlay events={subtitle?.events ?? []} ms={currentMs} />
+              </div>
+            ) : (
+              <div className="muted" style={{ color: '#94a3b8', fontSize: 12.5, textAlign: 'center', padding: 12 }}>
+                {videoPath && videoError
+                  ? `视频无法播放：${videoName}（文件可能已被移动，请重新选择）`
+                  : '未关联视频（仍可按时间轴审阅字幕）'}
+              </div>
+            )}
+          </div>
+          <div className="row wrap" style={{ gap: 6 }}>
+            <Badge tone={engine === 'mpv' ? 'teal' : 'gray'} dot={false}>
+              {engine === 'mpv' ? 'mpv 内嵌' : '内置播放器'}
+            </Badge>
+            <Badge tone={ep.reviewVideo ? 'teal' : templateVideo ? 'gray' : 'orange'} dot={false}>
+              {ep.reviewVideo ? '手动指定视频' : templateVideo ? '模板源视频' : '未选择视频'}
+            </Badge>
+            {videoName && (
+              <span className="mono muted" style={{ fontSize: 11.5, maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={videoPath ?? undefined}>
+                {videoName}
+              </span>
+            )}
+            <Button size="sm" aria-label="播放或暂停" disabled={!videoPath} onClick={togglePlay}>
+              {engine === 'mpv' ? (mpvStatus?.paused === false ? '暂停' : '播放') : '播放/暂停'}
+            </Button>
+            <span className="spacer" />
+            <Button size="sm" onClick={() => switchEngine(engine === 'mpv' ? 'builtin' : 'mpv')}>
+              {engine === 'mpv' ? '用内置播放器' : '用 mpv 内嵌'}
+            </Button>
+            <Button size="sm" onClick={() => void chooseVideo()}>选择审阅视频…</Button>
+            {ep.reviewVideo && (
+              <Button size="sm" kind="ghost" onClick={() => void clearVideo()}>恢复模板源</Button>
             )}
           </div>
           <div>
