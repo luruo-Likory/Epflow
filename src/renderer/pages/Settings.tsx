@@ -60,13 +60,13 @@ type DshMode = AppSettings['dsh']['mode']
 const DSH_MODE_ITEMS: Array<{ key: DshMode; label: string; title: string }> = [
   { key: 'paste', label: '粘贴 JSON', title: '生成本地 prompt，用户在 DSH 中执行后把 JSON 粘回' },
   { key: 'http', label: 'HTTP 接口', title: '调用 OpenAI 兼容的 /chat/completions 接口' },
-  { key: 'cli', label: '命令行', title: '直接调用本机 dsh 命令行' }
+  { key: 'cli', label: '命令行', title: '调用本机 dsh（headless）或 dcli 命令行' }
 ]
 
 const DSH_MODE_HINT: Record<DshMode, string> = {
   paste: '默认模式：只生成本地 prompt 文件，不联网；由用户把 prompt 粘贴到 DSH，再把返回 JSON 粘回 EpFlow。',
   http: '调用 OpenAI 兼容接口（如 DeepSeek / 本地网关），需要配置接口地址与 API Key 所在的环境变量。',
-  cli: '调用本机安装的 dsh 命令行，适合已在本机登录 DSH 的环境。'
+  cli: '直接调用本机命令行：优先 dsh（`dsh headless -`，任务从 stdin 读，长字幕最稳）；也兼容 dcli（SKzrui/DSH-CLI，任务只能走命令行参数）。留空命令时自动探测。'
 }
 
 const SECTIONS: Array<{ id: string; label: string }> = [
@@ -479,8 +479,9 @@ export default function SettingsPage(props: { onBack: () => void }): React.React
       if (!dsh.apiKeyEnv.trim()) result.dshApiKeyEnv = '请填写存放 API Key 的环境变量名'
     }
     if (dsh.mode === 'cli') {
-      if (!dsh.command.trim()) result.dshCommand = '请填写 dsh 命令或可执行文件路径'
-      if (!dsh.argsTemplate.trim()) result.dshArgs = '请填写参数模板'
+      const base = (dsh.command.trim().split(/[\\/]/).pop() ?? '').toLowerCase()
+      const builtin = ['dsh', 'dsh.cmd', 'dsh.exe', 'dsh.ps1', 'dcli', 'dcli.cmd', 'dcli.exe', 'dcli.ps1', 'bin.js', 'dcli.js'].includes(base)
+      if (!builtin && !dsh.argsTemplate.trim()) result.dshArgs = '自定义命令需要填写参数模板'
     }
 
     const chapter = draft.chapter
@@ -1010,10 +1011,14 @@ export default function SettingsPage(props: { onBack: () => void }): React.React
 
               {draft.dsh.mode === 'cli' && (
                 <Grid>
-                  <Field label="命令" hint="可执行文件名或绝对路径，例如 dsh" error={errors.dshCommand}>
+                  <Field
+                    label="命令"
+                    hint="留空自动探测 dsh.cmd / dcli.cmd（推荐 dsh：支持 stdin 长 prompt）。也可填绝对路径或 dsh 的 lib/bin.js"
+                    error={errors.dshCommand}
+                  >
                     <TextInput
                       value={draft.dsh.command}
-                      placeholder="dsh"
+                      placeholder="自动探测（dsh / dcli）"
                       onChange={(event) =>
                         mutate((next) => {
                           next.dsh.command = event.target.value
@@ -1023,13 +1028,13 @@ export default function SettingsPage(props: { onBack: () => void }): React.React
                   </Field>
                   <Field
                     label="参数模板"
-                    hint="可用占位符：{promptFile}（本次 prompt 文件路径）、{model}"
+                    hint="仅自定义命令使用。dsh / dcli 会自动套用内置参数：dsh headless -（stdin）或 dcli “任务”。可用占位符 {promptFile}、{model}"
                     error={errors.dshArgs}
                   >
                     <TextInput
                       className="input mono"
                       value={draft.dsh.argsTemplate}
-                      placeholder='exec --prompt-file "{promptFile}" --model {model} --output-format json'
+                      placeholder='exec --prompt-file "{promptFile}" --model {model}'
                       onChange={(event) =>
                         mutate((next) => {
                           next.dsh.argsTemplate = event.target.value

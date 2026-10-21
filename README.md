@@ -13,10 +13,10 @@
 
 | 产物 | 位置 | 说明 |
 |---|---|---|
-| **轻量安装版（推荐）** | `release\EpFlow-1.1.0-Setup-lite.exe` | 免管理员、装到 `%LOCALAPPDATA%\Programs\EpFlow`、建快捷方式；**不使用 NSIS 插件、不写临时目录**，可绕过 `Error writing temporary file` |
-| 标准安装版 | `release\EpFlow-1.1.0-Setup.exe` | electron-builder 生成的 NSIS 安装器（部分机器因 `%TEMP%` 受限会报临时文件错误） |
-| 便携版 | `release\EpFlow-1.1.0-portable.exe` | 单文件双击即用（启动时同样会解压到临时目录） |
-| 绿色 zip 版 | `release\EpFlow-1.1.0-x64.zip` | **解压即用，完全不写临时目录**，最稳的兜底 |
+| **轻量安装版（推荐）** | `release\EpFlow-1.1.2-Setup-lite.exe` | 免管理员、装到 `%LOCALAPPDATA%\Programs\EpFlow`、建快捷方式；**不使用 NSIS 插件、不写临时目录**，可绕过 `Error writing temporary file` |
+| 标准安装版 | `release\EpFlow-1.1.2-Setup.exe` | electron-builder 生成的 NSIS 安装器（部分机器因 `%TEMP%` 受限会报临时文件错误） |
+| 便携版 | `release\EpFlow-1.1.2-portable.exe` | 单文件双击即用（启动时同样会解压到临时目录） |
+| 绿色 zip 版 | `release\EpFlow-1.1.2-x64.zip` | **解压即用，完全不写临时目录**，最稳的兜底 |
 | 绿色目录版 | `release\win-unpacked\EpFlow.exe` | 调试/直接运行 |
 
 ---
@@ -131,9 +131,12 @@ npm run dist:portable
 | Aegisub | 人工审阅打开字幕 | 回退系统默认程序 |
 | mpv | 可选预览 | 使用内置播放器 |
 | Python | vpy 语法校验（可选） | 跳过校验并提示 |
-| DSH（或 OpenAI 兼容接口） | AI 审阅 | 可用「粘贴 JSON」模式 |
+| DSH / dcli（或 OpenAI 兼容接口） | AI 审阅 | 可用「粘贴 JSON」模式 |
 
 工具路径在「设置 → 外部工具」探测或手动指定，支持一键探测填充。
+
+> 想用「命令行」模式跑 AI 审阅，安装任一即可：
+> `npm i -g @deepseek-ai/dsh`（推荐，支持 stdin 长 prompt）或 `npm i -g @harmattan666/dcli`（DSH-CLI）。EpFlow 会自动从 `%APPDATA%\npm` 探测，无需手填路径。
 
 ---
 
@@ -145,7 +148,10 @@ npm run dist:portable
 |---|---|
 | `paste`（默认） | 软件生成 prompt 并复制到剪贴板 → 在 DSH 中审阅 → 把返回 JSON 粘回软件。无需任何命令行/接口。 |
 | `http` | 任何 OpenAI 兼容 `/chat/completions` 接口。API Key 只从环境变量读取（默认 `DEEPSEEK_API_KEY`），不写入配置文件。 |
-| `cli` | 本机有 `dsh` 命令行时直接调用，参数模板可配（`{promptFile}`、`{model}`）。 |
+| `cli` | 直接调用本机命令行，自动探测 `dsh` / `dcli`。**dsh 走 `headless -`，prompt 从 stdin 传入**（长字幕不受 32K 命令行限制）；`dcli`（DSH-CLI）走 one-shot 参数形态。留空命令即自动探测，也可手填 `dsh.cmd` / `dcli.cmd` / `lib\bin.js`。 |
+
+> 命令行模式会从 `~/.dsh/.credentials.yaml` 读取桌面版已保存的 `DEEPSEEK_API_KEY` 注入子进程（也可用环境变量覆盖）。
+> 实测 `dcli@0.2.8` 与 `dsh@0.2.1-rc.2` 存在 profile 兼容问题，优先使用 dsh。
 
 无论哪种模式，返回结果都会经过 zod Schema 校验；解析失败会保留原文与错误，可用「粘贴结果」手工修正后重试。
 
@@ -253,13 +259,13 @@ $env:ELECTRON_RUN_AS_NODE=$null
 | 现象 | 处理 |
 |---|---|
 | 首次运行被 SmartScreen 拦截 | 未做代码签名，点「更多信息 → 仍要运行」；正式分发建议购买签名证书 |
-| 安装时报 NSIS Error: Error writing temporary file | 标准 NSIS 安装器要先往 `%TEMP%` 释放插件，失败就会这样报。**直接用 `EpFlow-1.1.0-Setup-lite.exe`（无插件、不写临时目录）** 或 `EpFlow-1.1.0-x64.zip`；若想修环境：`echo %TEMP%` 确认目录存在可写，或 `set TEMP=%LOCALAPPDATA%\Temp` 后重试 |
+| 安装时报 NSIS Error: Error writing temporary file | 标准 NSIS 安装器要先往 `%TEMP%` 释放插件，失败就会这样报。**直接用 `EpFlow-1.1.2-Setup-lite.exe`（无插件、不写临时目录）** 或 `EpFlow-1.1.2-x64.zip`；若想修环境：`echo %TEMP%` 确认目录存在可写，或 `set TEMP=%LOCALAPPDATA%\Temp` 后重试 |
 | 压制按钮一直灰 | 看「压制」页的门禁清单，逐项处理（模板/AI/人工/章节/哈希/源视频） |
 | 找不到成品 | 用「重新扫描成品」或「手动指定」；OKEGui 输出目录必须在集目录的 `output\` 下 |
 | 合并失败 | 检查 MKVToolNix 路径、文件是否被播放器占用；失败会自动回滚备份 |
 | 压出来的字幕是乱码（如 `鏈 剒寋囀敋`） | 字幕是「UTF-8 无 BOM」，VSFilter/TextSubMod 会按 GBK 解码。本版导入与压制前都会自动补 BOM；旧工程打开后直接重新压制即可 |
 | 字幕改了但状态没变 | 软件在运行时会监视字幕所在目录（默认集目录）与集目录；也可重新导入会强制失效 |
-| AI 审阅报 DSH 不可用 | 切换到「粘贴 JSON」模式，或配置 HTTP 接口与环境变量 |
+| AI 审阅报 DSH 不可用 | 命令行模式先在「设置 → 外部工具」点「探测」确认 dsh/dcli 命中；也可切回「粘贴 JSON」或配置 HTTP 接口 |
 
 ---
 

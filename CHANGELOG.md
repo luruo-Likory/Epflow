@@ -1,5 +1,28 @@
 # CHANGELOG
 
+## 1.1.2（2026-10-20）
+
+### 修复
+
+- **外部工具探测 dsh/dcli 显示 `Error: spawn EINVAL`**：Node 不能直接 spawn Windows 的 `.cmd` 文件。现在探测版本前会先从 npm shim 解析出真正的 Node 入口（`@deepseek-ai/dsh/lib/bin.js` / `@harmattan666/dcli/bin/dcli.js`），再用 `process.execPath` 执行；工具行会正常显示 `0.2.1-rc.2` 而不是报错。
+  - shim 解析抽到 `src/main/integrations/shim.ts`，命令行调用与工具探测共用一份实现。
+
+## 1.1.1（2026-10-20）
+
+### 新增
+
+- **AI 审阅的「命令行」模式真正可用**：参考 [SKzrui/DSH-CLI](https://github.com/SKzrui/DSH-CLI) 的调用方式，EpFlow 现在能直接驱动本机 dsh / dcli 完成审阅，不再依赖手动粘贴。
+  - **dsh（推荐）**：`dsh headless -`，任务从 **stdin** 读取，长 prompt 不受 Windows 命令行 32K 上限影响；stdout 就是最终答案，干净可解析。
+  - **dcli（兼容）**：SKzrui/DSH-CLI 的 one-shot 形态，任务只能作为命令行参数；超过 20000 字符会给出明确提示，避免被系统截断。
+  - **自动探测**：留空即可自动找 `%APPDATA%\npm\dsh.cmd`、`dcli.cmd`，或直接指向 `@deepseek-ai/dsh/lib/bin.js` / `@harmattan666/dcli/bin/dcli.js`；也能从 npm 的 `.cmd` shim 解析出 Node 入口，绕开 Windows 不能直接 spawn `.cmd` 的问题。
+  - **凭据自动注入**：桌面版已登录时，从 `~/.dsh/.credentials.yaml` 读取 `DEEPSEEK_API_KEY` 注入子进程；也支持原有的 `DEEPSEEK_API_KEY` 环境变量。
+  - 设置页「AI 审阅 → 命令行」更新了说明与校验：命令留空 = 自动探测，参数模板仅在自定义命令时需要。
+- 新增 `tests/dsh-cli.test.ts`：命令行识别、shim 解析、stdin 长 prompt、dcli argv 与超长保护。
+
+### 说明
+
+- 实测 `dcli@0.2.8` 搭配 `dsh@0.2.1-rc.2` 会在启动时报 `user patch-layer watching requires the Cordis HMR service`（dcli 的 profile 版本不匹配），因此 EpFlow 优先使用 dsh 的 headless 模式；dcli 分支保留给兼容版本。
+
 ## 1.1.0（2026-10-19）
 
 自 v1.0.0 起的累计迭代（v1.0.1 ~ v1.0.8）汇总发布。

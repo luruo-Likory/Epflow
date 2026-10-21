@@ -4,6 +4,7 @@ import type { ToolPaths } from '@shared/types'
 import { getSettings, saveSettings } from '../store/settings'
 import { existsLong } from '../util/paths'
 import { probeVersion } from './process-runner'
+import { nodeEntryFor } from './shim'
 
 export type ToolKey = keyof ToolPaths
 
@@ -19,13 +20,18 @@ export interface ToolProbe {
   required: boolean
 }
 
+/** npm 全局 bin 目录（Windows 默认 %APPDATA%\npm） */
+function npmBin(...parts: string[]): string {
+  const dir = process.env.APPDATA ? path.join(process.env.APPDATA, 'npm') : ''
+  return dir ? path.join(dir, ...parts) : ''
+}
+
 const CANDIDATES: Record<ToolKey, string[]> = {
   okegui: [
     'D:\\media\\OKEGui\\OKEGui.exe',
     'D:\\media\\local64\\OKEGui\\OKEGui.exe',
     'C:\\Program Files\\OKEGui\\OKEGui.exe'
-  ],
-  ffmpeg: [
+  ],  ffmpeg: [
     'D:\\media\\local64\\bin-video\\ffmpeg.exe',
     'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe'
   ],
@@ -54,7 +60,13 @@ const CANDIDATES: Record<ToolKey, string[]> = {
   ],
   mpv: ['D:\\media\\local64\\bin-video\\mpv.exe'],
   python: ['D:\\media\\OKEGui\\tools\\vapoursynth\\python.exe'],
-  dsh: []
+  // AI 审阅命令行：优先 dsh（headless 一次性任务），其次 dcli（DSH-CLI 启动器）
+  dsh: [
+    npmBin('dsh.cmd'),
+    npmBin('dcli.cmd'),
+    npmBin('node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'),
+    npmBin('node_modules', '@harmattan666', 'dcli', 'bin', 'dcli.js')
+  ].filter(Boolean)
 }
 
 const LABELS: Record<ToolKey, string> = {
@@ -66,7 +78,7 @@ const LABELS: Record<ToolKey, string> = {
   aegisub: 'Aegisub（人工审阅）',
   mpv: 'mpv（预览播放）',
   python: 'Python（vpy 语法校验）',
-  dsh: 'DSH（AI 审阅）'
+  dsh: 'DSH / dcli（AI 审阅）'
 }
 
 const VERSION_ARGS: Record<ToolKey, string[]> = {
@@ -104,7 +116,7 @@ const PATH_EXE: Record<ToolKey, string[]> = {
   aegisub: ['aegisub64.exe', 'aegisub32.exe', 'aegisub.exe'],
   mpv: ['mpv.exe'],
   python: ['python.exe'],
-  dsh: ['dsh.cmd', 'dsh.exe', 'dsh.ps1']
+  dsh: ['dsh.cmd', 'dsh.exe', 'dcli.cmd', 'dcli.exe', 'dsh.ps1', 'dcli.ps1']
 }
 
 function searchPath(names: string[]): string | null {
@@ -189,7 +201,11 @@ export async function detectTools(options: { withVersion?: boolean } = {}): Prom
           probe.version = null
           return
         }
-        probe.version = await probeVersion(probe.path, probe.versionArgs)
+        // .cmd / .bat 不能被 Node 直接 spawn（EINVAL），解析 shim 后用 Node 跑真正的入口
+        const entry = nodeEntryFor(probe.path)
+        probe.version = entry
+          ? await probeVersion(process.execPath, [entry, ...probe.versionArgs])
+          : await probeVersion(probe.path, probe.versionArgs)
       })
     )
   }

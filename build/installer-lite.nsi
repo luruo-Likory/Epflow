@@ -3,23 +3,23 @@ Unicode true
 !include "MUI2.nsh"
 
 !define APP_NAME "EpFlow"
-!define APP_VERSION "1.1.0"
+!define APP_VERSION "1.1.2"
 !define APP_EXE "EpFlow.exe"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\EpFlow"
 
 Name "${APP_NAME}"
-OutFile "..\release\EpFlow-1.1.0-Setup-lite.exe"
+OutFile "..\release\EpFlow-1.1.2-Setup-lite.exe"
 InstallDir "$LOCALAPPDATA\Programs\EpFlow"
 RequestExecutionLevel user
 SetCompressor /SOLID zlib
 SetCompressorDictSize 32
 BrandingText "EpFlow 番剧流程规范化"
 
-VIProductVersion "1.1.0.0"
+VIProductVersion "1.1.2.0"
 VIAddVersionKey "ProductName" "EpFlow"
 VIAddVersionKey "FileDescription" "EpFlow 安装程序（轻量版）"
-VIAddVersionKey "FileVersion" "1.1.0"
-VIAddVersionKey "ProductVersion" "1.1.0"
+VIAddVersionKey "FileVersion" "1.1.2"
+VIAddVersionKey "ProductVersion" "1.1.2"
 VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 EpFlow"
 
 !define MUI_ICON "..\build\icon.ico"

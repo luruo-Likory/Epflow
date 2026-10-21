@@ -4,6 +4,7 @@ import os from 'node:os'
 import type { DshSettings } from '@shared/types'
 import { runProcess } from './process-runner'
 import { resolveTool } from './tools'
+import { nodeEntryFor } from './shim'
 import { scoped } from '../util/logger'
 
 const log = scoped('dsh')
@@ -51,7 +52,10 @@ export function dshAvailable(settings: DshSettings): { ok: boolean; reason?: str
     const found = resolveTool('dsh')
     if (found.exists) return { ok: true }
   }
-  return { ok: false, reason: '未找到 dsh 命令行（可在设置中手动指定，或改用「粘贴 JSON」模式）' }
+  return {
+    ok: false,
+    reason: '未找到 dsh / dcli 命令行（可在设置中手动指定，或改用「粘贴 JSON」模式）'
+  }
 }
 
 /**
@@ -125,40 +129,137 @@ function extractContent(payload: Record<string, unknown>): string | null {
   return null
 }
 
+type CliKind = 'dsh' | 'dcli' | 'custom'
+
+function normalizeSlashes(value: string): string {
+  return value.replace(/\\/g, '/').toLowerCase()
+}
+
+/**
+ * 判断命令行属于哪种实现。
+ * - dsh：官方 CLI，支持 `dsh headless -`，任务从 stdin 读，适合长 prompt
+ * - dcli：SKzrui/DSH-CLI 的启动器，只支持把任务作为命令行参数
+ */
+export function cliKindOf(command: string): CliKind {
+  const lower = normalizeSlashes(command)
+  const base = path.basename(command).toLowerCase()
+  if (lower.includes('@deepseek-ai/dsh') || ['dsh', 'dsh.cmd', 'dsh.exe', 'dsh.ps1'].includes(base)) {
+    return 'dsh'
+  }
+  if (
+    lower.includes('harmattan666') ||
+    lower.includes('/dcli/') ||
+    ['dcli', 'dcli.cmd', 'dcli.exe', 'dcli.ps1'].includes(base)
+  ) {
+    return 'dcli'
+  }
+  return 'custom'
+}
+
+/** 从 npm 生成的 .cmd shim 里解析出真正的 Node 入口（实现在 shim.ts，工具探测也复用） */
+export { shimNodeEntry } from './shim'
+
+/** dcli 只能把任务放在 argv 里，超过 Windows 命令行上限会失败，留出安全余量 */
+const DCLI_MAX_PROMPT_CHARS = 20_000
+
+/** 从 DSH 凭据库读取 API Key（桌面版登录后密钥存在这里，headless 需要环境变量） */
+function apiKeyFromCredentialStore(name: string): string | null {
+  try {
+    const file = path.join(os.homedir(), '.dsh', '.credentials.yaml')
+    const text = fs.readFileSync(file, 'utf8')
+    const match = new RegExp(`${name}\\s*:\\s*(sk-[A-Za-z0-9_-]+)`).exec(text)
+    return match?.[1] ?? null
+  } catch {
+    return null
+  }
+}
+
+function buildCliEnv(settings: DshSettings): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    NO_COLOR: '1',
+    DCLI_FORMAT: '0',
+    DCLI_SPLIT: '0'
+  }
+  const keyName = settings.apiKeyEnv || 'DEEPSEEK_API_KEY'
+  if (!env[keyName]) {
+    const stored = apiKeyFromCredentialStore(keyName)
+    if (stored) env[keyName] = stored
+  }
+  return env
+}
+
 async function callCli(prompt: string, settings: DshSettings): Promise<string> {
   const tool = resolveTool('dsh')
   const command = tool.exists ? tool.path : settings.command
-  if (!command) throw new DshUnavailableError('未配置 dsh 命令行')
+  if (!command) throw new DshUnavailableError('未配置 dsh / dcli 命令行')
   if (/deepseek[ _-]?harness\.exe$/i.test(command)) {
     throw new DshUnavailableError(
       '当前「dsh 路径」指向的是 DSH 桌面程序，它不接受命令行参数',
-      '请改用「粘贴 JSON」模式（推荐），或在「AI 审阅」里配置 HTTP 接口 / 真正的 dsh CLI'
+      '请指向 dsh.cmd / dcli.cmd（或 dsh 的 lib/bin.js），或改用「粘贴 JSON」模式'
     )
   }
 
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'epflow-dsh-'))
-  const promptFile = path.join(tmpDir, 'prompt.md')
-  fs.writeFileSync(promptFile, prompt, 'utf8')
-  const args = buildArgs(settings.argsTemplate, { promptFile, model: settings.model })
+  const kind = cliKindOf(command)
+  const nodeEntry = nodeEntryFor(command)
+  if (!nodeEntry && /\.(cmd|bat)$/i.test(command)) {
+    throw new DshUnavailableError(
+      `无法从 ${path.basename(command)} 解析出 Node 入口`,
+      '请在设置里把路径指向 node_modules\\@deepseek-ai\\dsh\\lib\\bin.js 或 dcli 的 bin\\dcli.js'
+    )
+  }
+
+  const env = buildCliEnv(settings)
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'epflow-ai-'))
+  let file = command
+  let args: string[] = []
+  let stdin: string | undefined
+
+  if (kind === 'dsh') {
+    // 官方 CLI 的一次性模式：任务从 stdin 读（`-`），长 prompt 不受命令行长度限制
+    file = nodeEntry ? process.execPath : command
+    args = nodeEntry ? [nodeEntry, 'headless', '-'] : ['headless', '-']
+    stdin = prompt
+  } else if (kind === 'dcli') {
+    if (prompt.length > DCLI_MAX_PROMPT_CHARS) {
+      throw new DshUnavailableError(
+        `提示词 ${prompt.length} 字符，超过 dcli 命令行参数的安全上限`,
+        '请安装 dsh 并在设置里指向 dsh.cmd（支持 stdin 长 prompt），或改用「粘贴 JSON」模式'
+      )
+    }
+    file = nodeEntry ? process.execPath : command
+    args = nodeEntry ? [nodeEntry, prompt] : [prompt]
+  } else {
+    const promptFile = path.join(workDir, 'prompt.md')
+    fs.writeFileSync(promptFile, prompt, 'utf8')
+    args = buildArgs(settings.argsTemplate, { promptFile, model: settings.model })
+  }
 
   try {
-    const result = await runProcess(command, args, { timeoutMs: settings.timeoutMs })
-    if (result.timedOut) throw new Error(`dsh 调用超时（${settings.timeoutMs}ms）`)
+    const result = await runProcess(file, args, {
+      timeoutMs: settings.timeoutMs,
+      env,
+      stdin,
+      // 隔离 dsh/dcli 的会话目录，避免污染项目目录；自定义命令沿用调用方环境
+      cwd: kind === 'custom' ? undefined : workDir,
+      maxOutput: 4_000_000
+    })
+    if (result.timedOut) throw new Error(`AI 调用超时（${settings.timeoutMs}ms）`)
     if (result.code !== 0) {
-      throw new Error(`dsh 退出码 ${result.code}：${(result.stderr || result.stdout).slice(0, 800)}`)
+      throw new Error(`AI 命令退出码 ${result.code}：${(result.stderr || result.stdout).slice(0, 800)}`)
     }
     const text = result.stdout.trim() || result.stderr.trim()
-    if (!text) throw new Error('dsh 没有输出内容')
+    if (!text) throw new Error('AI 命令没有输出内容')
     return text
   } finally {
     setTimeout(() => {
       try {
-        fs.rmSync(tmpDir, { recursive: true, force: true })
+        fs.rmSync(workDir, { recursive: true, force: true })
       } catch {
         /* ignore */
       }
     }, 5_000)
-    log.debug('cli call done')
+    log.debug('cli call done', { kind })
   }
 }
 
